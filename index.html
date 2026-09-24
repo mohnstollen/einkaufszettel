@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<title>Einkaufszettel</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Einkaufszettel">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Einkaufszettel</h1>
+    <span class="counter" id="counter">0 / 0</span>
+    <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neu starten">Neuer Einkauf</button>
+  </div>
+  <div class="topbar-row tools">
+    <input type="search" id="search" placeholder="Suchen…" autocomplete="off">
+    <button id="btnOnlyNeeded" class="btn ghost" title="Nur markierte Produkte anzeigen">Nur Liste</button>
+    <button id="btnMenu" class="btn ghost" title="Menü">⋯</button>
+    <div class="menu hidden" id="menu">
+      <button data-act="addProduct">+ Produkt hinzufügen</button>
+      <button data-act="addSection">+ Abschnitt hinzufügen</button>
+      <button data-act="archive">🕘 Archiv anzeigen</button>
+      <button data-act="clearMarks">Markierungen löschen (ohne Archiv)</button>
+      <button data-act="export">Liste exportieren (Text)</button>
+      <button data-act="backup">Backup (JSON) speichern</button>
+      <button data-act="restore">Backup einlesen</button>
+      <button data-act="reset">Auf Standardliste zurücksetzen</button>
+    </div>
+  </div>
+</header>
+
+<main id="list"></main>
+
+<button class="fab" id="fab" title="Produkt hinzufügen">+</button>
+
+<dialog id="dlgProduct">
+  <form method="dialog" id="formProduct">
+    <h2 id="dlgProductTitle">Produkt hinzufügen</h2>
+    <label>Name
+      <input type="text" id="pName" required autocomplete="off">
+    </label>
+    <label>Abschnitt
+      <select id="pSection"></select>
+    </label>
+    <label>Notiz / Menge (optional)
+      <input type="text" id="pNote" autocomplete="off" placeholder="z. B. 2 Packungen">
+    </label>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary" type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgSection">
+  <form method="dialog" id="formSection">
+    <h2 id="dlgSectionTitle">Abschnitt hinzufügen</h2>
+    <label>Name
+      <input type="text" id="sName" required autocomplete="off">
+    </label>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary" type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgArchive">
+  <form method="dialog">
+    <h2>Archiv</h2>
+    <div id="archiveBody" class="archive-body"></div>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit">Schließen</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgText">
+  <form method="dialog">
+    <h2 id="dlgTextTitle">Liste</h2>
+    <textarea id="txtArea" rows="14"></textarea>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit">Schließen</button>
+      <button value="ok" class="btn primary" type="submit" id="btnTextOk">Kopieren</button>
+    </menu>
+  </form>
+</dialog>
+
+<input type="file" id="fileInput" accept="application/json" hidden>
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>
