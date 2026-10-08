@@ -28,17 +28,14 @@ function defaultState() {
       id: uid(), name, collapsed: false,
       products: products.map(n => ({ id: uid(), name: n, needed: false, done: false, note: '' }))
     })),
-    trip: null,          // { date: 'YYYY-MM-DD', store: 'Lidl' }
-    lastStore: '',
-    onlyNeeded: false,
-    archive: []
+    trip: null, lastStore: '', onlyNeeded: false, archive: []
   };
 }
 
 let state = load();
 let editing = null;
 let editingSection = null;
-let tripDialogMode = 'new';   // 'new' | 'edit'
+let tripDialogMode = 'new';
 
 /* ---------- Laden / Migration ---------- */
 function migrate(s) {
@@ -51,7 +48,6 @@ function migrate(s) {
   delete s.onlyChecked;
   if (!Array.isArray(s.archive)) s.archive = [];
   s.archive.forEach(t => {
-    // v2-Einträge: nur "date" (Zeitstempel der Archivierung) vorhanden
     if (!t.archivedAt) t.archivedAt = t.date;
     if (!t.tripDate) t.tripDate = (t.date || '').slice(0, 10);
     if (!t.store) t.store = 'Unbekannt';
@@ -75,7 +71,6 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catc
 const $ = sel => document.querySelector(sel);
 const listEl = $('#list');
 
-/* ---------- Formatierung ---------- */
 const fmtDay = iso => {
   if (!iso) return '–';
   const [y, m, d] = iso.split('-').map(Number);
@@ -84,18 +79,28 @@ const fmtDay = iso => {
 const fmtStamp = iso => iso ? new Date(iso).toLocaleString('de-DE',
   { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '–';
 
-/* ---------- Rendering Liste ---------- */
+function iconBtn(cls, icon, title) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = cls; b.innerHTML = ICON[icon]; b.title = title;
+  b.setAttribute('aria-label', title);
+  return b;
+}
+
+/* ---------- Rendering ---------- */
 function rank(p) { return p.needed ? (p.done ? 1 : 0) : 2; }
 
 function renderTripBar() {
   const bar = $('#tripBar');
   if (state.trip) {
-    bar.innerHTML = '<span>🏪 <b></b></span><span>📅 <span class="d"></span></span><span class="edit">✎</span>';
-    bar.querySelector('b').textContent = state.trip.store;
+    bar.innerHTML =
+      '<span class="tb-item">' + ICON.store + '<b class="s"></b></span>' +
+      '<span class="tb-item">' + ICON.calendar + '<span class="d"></span></span>' +
+      '<span class="tb-edit">' + ICON.edit + '</span>';
+    bar.querySelector('.s').textContent = state.trip.store;
     bar.querySelector('.d').textContent = fmtDay(state.trip.date);
     bar.classList.remove('empty-trip');
   } else {
-    bar.innerHTML = '<span>Kein Supermarkt/Datum gewählt – hier tippen</span>';
+    bar.innerHTML = '<span class="tb-item">' + ICON.store + '<span>Supermarkt und Datum wählen</span></span>';
     bar.classList.add('empty-trip');
   }
 }
@@ -123,20 +128,19 @@ function render() {
 
     const head = document.createElement('div');
     head.className = 'section-head';
-    head.innerHTML = '<span class="chev">▾</span><h2></h2><span class="cnt"></span>' +
-      '<button class="act" data-sec-edit title="Abschnitt bearbeiten">✎</button>' +
-      '<button class="act del" data-sec-del title="Abschnitt löschen">🗑</button>';
+    head.innerHTML = '<span class="chev">' + ICON.chevron + '</span><h2></h2><span class="cnt"></span>';
     head.querySelector('h2').textContent = sec.name;
     const cnt = head.querySelector('.cnt');
     cnt.textContent = need.length
       ? need.filter(p => p.done).length + ' / ' + need.length + ' erledigt'
       : sec.products.length + ' Produkte';
     if (need.length) cnt.classList.add('active');
-    head.addEventListener('click', e => {
-      if (e.target.closest('[data-sec-edit]')) { openSection(sec); return; }
-      if (e.target.closest('[data-sec-del]')) { delSection(sec); return; }
-      sec.collapsed = !sec.collapsed; save(); render();
-    });
+    const se = iconBtn('act', 'edit', 'Abschnitt umbenennen');
+    const sd = iconBtn('act del', 'trash', 'Abschnitt löschen');
+    se.addEventListener('click', e => { e.stopPropagation(); openSection(sec); });
+    sd.addEventListener('click', e => { e.stopPropagation(); delSection(sec); });
+    head.append(se, sd);
+    head.addEventListener('click', () => { sec.collapsed = !sec.collapsed; save(); render(); });
     secEl.appendChild(head);
 
     const ul = document.createElement('ul');
@@ -150,16 +154,11 @@ function render() {
       const li = document.createElement('li');
       li.className = 'item' + (p.needed ? ' needed' : '') + (p.needed && p.done ? ' done' : '');
 
-      const star = document.createElement('button');
-      star.className = 'mark' + (p.needed ? ' on' : '');
-      star.textContent = p.needed ? '★' : '☆';
-      star.title = p.needed ? 'Vom Einkauf entfernen' : 'Zum Einkauf hinzufügen';
+      const star = iconBtn('mark' + (p.needed ? ' on' : ''), p.needed ? 'starOn' : 'star',
+        p.needed ? 'Vom Einkauf entfernen' : 'Zum Einkauf hinzufügen');
       star.addEventListener('click', () => { p.needed = !p.needed; if (!p.needed) p.done = false; save(); render(); });
 
-      const cart = document.createElement('button');
-      cart.className = 'cart' + (p.done ? ' on' : '');
-      cart.textContent = p.done ? '☑' : '☐';
-      cart.title = 'Im Einkaufswagen';
+      const cart = iconBtn('cart' + (p.done ? ' on' : ''), p.done ? 'boxOn' : 'box', 'Im Einkaufswagen');
       cart.disabled = !p.needed;
       cart.addEventListener('click', () => { p.done = !p.done; save(); render(); });
 
@@ -170,12 +169,9 @@ function render() {
       if (p.note) { const n = document.createElement('div'); n.className = 'note'; n.textContent = p.note; nameWrap.appendChild(n); }
       nameWrap.addEventListener('click', () => { if (!p.needed) p.needed = true; else p.done = !p.done; save(); render(); });
 
-      const edit = document.createElement('button');
-      edit.className = 'act'; edit.textContent = '✎'; edit.title = 'Bearbeiten';
+      const edit = iconBtn('act', 'edit', 'Bearbeiten');
       edit.addEventListener('click', () => openProduct(sec, p));
-
-      const del = document.createElement('button');
-      del.className = 'act del'; del.textContent = '🗑'; del.title = 'Löschen';
+      const del = iconBtn('act del', 'trash', 'Löschen');
       del.addEventListener('click', () => {
         if (!confirm('„' + p.name + '“ dauerhaft löschen?')) return;
         sec.products = sec.products.filter(x => x.id !== p.id); save(); render(); toast('Gelöscht');
@@ -193,7 +189,7 @@ function render() {
   $('#btnOnlyNeeded').classList.toggle('on', state.onlyNeeded);
 }
 
-/* ---------- Einkauf-Dialog (Datum + Supermarkt) ---------- */
+/* ---------- Einkauf-Dialog ---------- */
 function fillStoreSelect(sel, current) {
   sel.innerHTML = '<option value="" disabled>Bitte wählen…</option>';
   [...STORES, OTHER].forEach(s => {
@@ -201,7 +197,7 @@ function fillStoreSelect(sel, current) {
   });
   if (!current) { sel.value = ''; return ''; }
   if (STORES.includes(current)) { sel.value = current; return ''; }
-  sel.value = OTHER; return current;   // eigener Name
+  sel.value = OTHER; return current;
 }
 function toggleOther() {
   const isOther = $('#tStore').value === OTHER;
@@ -219,13 +215,13 @@ function currentMarkedEntries() {
   return entries;
 }
 
-function openTripDialog(mode) {
+function openTripDialog(mode, presetStore) {
   tripDialogMode = mode;
   const isNew = mode === 'new';
   $('#dlgTripTitle').textContent = isNew ? 'Neuer Einkauf' : (state.trip ? 'Einkauf bearbeiten' : 'Wo und wann kaufst du ein?');
   $('#btnTripOk').textContent = isNew ? 'Starten' : 'Speichern';
 
-  const base = isNew ? { date: todayISO(), store: state.lastStore } : (state.trip || { date: todayISO(), store: state.lastStore });
+  const base = isNew || !state.trip ? { date: todayISO(), store: presetStore || state.lastStore } : state.trip;
   $('#tDate').value = base.date;
   $('#tOther').value = fillStoreSelect($('#tStore'), base.store);
   toggleOther();
@@ -266,9 +262,8 @@ $('#formTrip').addEventListener('submit', e => {
     state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
     state.onlyNeeded = false;
     toast(entries.length ? 'Archiviert – neuer Einkauf bei ' + store : 'Neuer Einkauf bei ' + store);
-  } else {
-    toast('Einkauf aktualisiert');
-  }
+  } else toast('Einkauf aktualisiert');
+
   state.trip = { date, store };
   state.lastStore = store;
   save(); render();
@@ -286,13 +281,9 @@ function tripCounts(trip) {
   const done = trip.entries.reduce((n, e) => n + e.items.filter(i => i.done).length, 0);
   return { total, done };
 }
-function filteredArchive() {
-  return state.archive.filter(t => !archiveFilter || t.store === archiveFilter);
-}
 function fillArchiveFilter() {
   const sel = $('#archiveFilter');
-  const stores = [...new Set(state.archive.map(t => t.store))]
-    .sort((a, b) => a.localeCompare(b, 'de'));
+  const stores = [...new Set(state.archive.map(t => t.store))].sort((a, b) => a.localeCompare(b, 'de'));
   sel.innerHTML = '<option value="">Alle Märkte (' + state.archive.length + ')</option>';
   stores.forEach(s => {
     const o = document.createElement('option');
@@ -303,9 +294,7 @@ function fillArchiveFilter() {
   sel.value = archiveFilter;
 }
 $('#archiveFilter').addEventListener('change', e => { archiveFilter = e.target.value; renderArchive(); });
-document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-  archiveTab = t.dataset.tab; renderArchive();
-}));
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => { archiveTab = t.dataset.tab; renderArchive(); }));
 
 function openArchive() { fillArchiveFilter(); renderArchive(); $('#dlgArchive').showModal(); }
 
@@ -313,10 +302,9 @@ function renderArchive() {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === archiveTab));
   const box = $('#archiveBody');
   box.innerHTML = '';
-  const trips = filteredArchive();
+  const trips = state.archive.filter(t => !archiveFilter || t.store === archiveFilter);
   if (!trips.length) { box.innerHTML = '<div class="empty">Noch keine archivierten Einkäufe.</div>'; return; }
-  if (archiveTab === 'stats') renderStats(box, trips);
-  else renderTripList(box, trips);
+  if (archiveTab === 'stats') renderStats(box, trips); else renderTripList(box, trips);
 }
 
 function renderTripList(box, trips) {
@@ -325,10 +313,11 @@ function renderTripList(box, trips) {
     const det = document.createElement('details');
     det.className = 'trip';
     const sum = document.createElement('summary');
-    sum.innerHTML = '<div class="trip-main"><span class="trip-store"></span><span class="trip-date"></span></div>' +
+    sum.innerHTML = '<div class="trip-main"><span class="trip-store">' + ICON.store + '<span class="t"></span></span>' +
+      '<span class="trip-date">' + ICON.calendar + '<span class="t"></span></span></div>' +
       '<span class="trip-cnt">' + done + ' / ' + total + ' erledigt</span>';
-    sum.querySelector('.trip-store').textContent = trip.store;
-    sum.querySelector('.trip-date').textContent = fmtDay(trip.tripDate);
+    sum.querySelector('.trip-store .t').textContent = trip.store;
+    sum.querySelector('.trip-date .t').textContent = fmtDay(trip.tripDate);
     det.appendChild(sum);
 
     const meta = document.createElement('div');
@@ -343,7 +332,10 @@ function renderTripList(box, trips) {
       e.items.forEach(i => {
         const li = document.createElement('li');
         if (i.done) li.className = 'done';
-        li.textContent = (i.done ? '☑ ' : '☐ ') + i.name + (i.note ? ' (' + i.note + ')' : '');
+        li.innerHTML = i.done ? ICON.check : ICON.open;
+        const s = document.createElement('span');
+        s.textContent = i.name + (i.note ? ' (' + i.note + ')' : '');
+        li.appendChild(s);
         ul.appendChild(li);
       });
       det.appendChild(ul);
@@ -372,39 +364,36 @@ function renderStats(box, trips) {
   trips.forEach(t => {
     const seen = new Set();
     t.entries.forEach(e => e.items.forEach(i => {
-      const k = i.name.trim();
-      if (seen.has(k.toLowerCase())) return;
-      seen.add(k.toLowerCase());
-      const c = counts.get(k.toLowerCase()) || { name: k, listed: 0, bought: 0 };
+      const k = i.name.trim().toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      const c = counts.get(k) || { name: i.name.trim(), listed: 0, bought: 0 };
       c.listed++; if (i.done) c.bought++;
-      counts.set(k.toLowerCase(), c);
+      counts.set(k, c);
     }));
   });
   const top = [...counts.values()].sort((a, b) => b.listed - a.listed || b.bought - a.bought || a.name.localeCompare(b.name, 'de')).slice(0, 20);
-
   const last = trips.reduce((a, t) => (!a || t.tripDate > a.tripDate ? t : a), null);
+
   const head = document.createElement('div');
   head.className = 'stats-head';
   head.innerHTML = '<div><b>' + trips.length + '</b><span>Einkäufe</span></div>' +
     '<div><b>' + counts.size + '</b><span>versch. Produkte</span></div>' +
     '<div><b class="last"></b><span>letzter Einkauf</span></div>';
-  head.querySelector('.last').textContent = last ? fmtDay(last.tripDate).replace(/^\w+\.,\s*/, '') : '–';
+  head.querySelector('.last').textContent = last ? fmtDay(last.tripDate).replace(/^[^,]+,\s*/, '') : '–';
   box.appendChild(head);
 
   if (!archiveFilter) {
-    // Einkäufe pro Markt
     const perStore = {};
     trips.forEach(t => perStore[t.store] = (perStore[t.store] || 0) + 1);
     const h = document.createElement('div'); h.className = 'trip-sec'; h.textContent = 'Einkäufe pro Markt';
     box.appendChild(h);
     box.appendChild(barTable(Object.entries(perStore).sort((a, b) => b[1] - a[1]).map(([n, v]) => ({ name: n, value: v, label: v + '×' }))));
   }
-
   const h2 = document.createElement('div'); h2.className = 'trip-sec';
   h2.textContent = 'Häufigste Produkte' + (archiveFilter ? ' bei ' + archiveFilter : '');
   box.appendChild(h2);
   box.appendChild(barTable(top.map(c => ({ name: c.name, value: c.listed, label: c.listed + '×' + (c.bought !== c.listed ? ' (' + c.bought + ' gekauft)' : '') }))));
-
   const hint = document.createElement('div'); hint.className = 'trip-meta';
   hint.textContent = 'Zählt, wie oft ein Produkt auf einer archivierten Liste stand.';
   box.appendChild(hint);
@@ -423,8 +412,7 @@ function barTable(rows) {
 }
 
 function reuseTrip(trip) {
-  const hasMarks = currentMarkedEntries().length;
-  if (hasMarks && !confirm('Aktuelle Markierungen durch diese Liste ersetzen? (Die aktuelle Liste wird nicht archiviert.)')) return;
+  if (currentMarkedEntries().length && !confirm('Aktuelle Markierungen durch diese Liste ersetzen? (Die aktuelle Liste wird nicht archiviert.)')) return;
   state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
   let created = 0;
   trip.entries.forEach(e => {
@@ -436,19 +424,10 @@ function reuseTrip(trip) {
       else { sec.products.push({ id: uid(), name: i.name, note: i.note, needed: true, done: false }); created++; }
     });
   });
+  state.trip = null;
   save(); render(); $('#dlgArchive').close();
   toast('Liste übernommen' + (created ? ' (' + created + ' Produkte neu angelegt)' : ''));
-  // Markt + Datum für den neuen Einkauf festlegen
-  setTimeout(() => {
-    tripDialogMode = 'edit';
-    $('#dlgTripTitle').textContent = 'Wo und wann kaufst du ein?';
-    $('#btnTripOk').textContent = 'Übernehmen';
-    $('#tDate').value = todayISO();
-    $('#tOther').value = fillStoreSelect($('#tStore'), trip.store !== 'Unbekannt' ? trip.store : state.lastStore);
-    toggleOther();
-    $('#tripInfo').classList.add('hidden');
-    $('#dlgTrip').showModal();
-  }, 150);
+  setTimeout(() => openTripDialog('edit', trip.store !== 'Unbekannt' ? trip.store : ''), 150);
 }
 
 /* ---------- Produkt-Dialog ---------- */
@@ -457,9 +436,7 @@ function openProduct(sec, product) {
   $('#dlgProductTitle').textContent = product ? 'Produkt bearbeiten' : 'Produkt hinzufügen';
   const sel = $('#pSection');
   sel.innerHTML = '';
-  state.sections.forEach(s => {
-    const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o);
-  });
+  state.sections.forEach(s => { const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o); });
   sel.value = sec ? sec.id : (state.sections[0] || {}).id;
   $('#pName').value = product ? product.name : '';
   $('#pNote').value = product ? (product.note || '') : '';
@@ -512,14 +489,14 @@ $('#formSection').addEventListener('submit', e => {
 $('#btnMenu').addEventListener('click', e => { e.stopPropagation(); $('#menu').classList.toggle('hidden'); });
 document.addEventListener('click', () => $('#menu').classList.add('hidden'));
 $('#menu').addEventListener('click', e => {
-  const act = e.target.dataset.act; if (!act) return;
+  const btn = e.target.closest('[data-act]'); if (!btn) return;
   $('#menu').classList.add('hidden');
   ({ addProduct: () => openProduct(state.sections[0], null),
      addSection: () => openSection(null),
      archive: () => { archiveTab = 'list'; openArchive(); },
      stats: () => { archiveTab = 'stats'; openArchive(); },
      clearMarks, export: exportText, backup: backupJSON,
-     restore: () => $('#fileInput').click(), reset: resetAll })[act]();
+     restore: () => $('#fileInput').click(), reset: resetAll })[btn.dataset.act]();
 });
 $('#fab').addEventListener('click', () => openProduct(state.sections[0], null));
 $('#search').addEventListener('input', render);
@@ -573,5 +550,6 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2000);
 }
 
+applyIcons();
 render();
 if (!state.trip) setTimeout(() => openTripDialog('edit'), 300);

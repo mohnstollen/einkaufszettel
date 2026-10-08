@@ -19,16 +19,17 @@
     <span class="counter" id="counter">0 / 0</span>
     <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neuen Einkauf starten">Neuer Einkauf</button>
   </div>
-  <button id="tripBar" class="trip-bar" title="Supermarkt und Datum ändern"></button>
+  <button id="tripBar" class="trip-bar" type="button" title="Supermarkt und Datum ändern"></button>
   <div class="topbar-row tools">
     <input type="search" id="search" placeholder="Suchen…" autocomplete="off">
     <button id="btnOnlyNeeded" class="btn ghost" title="Nur markierte Produkte anzeigen">Nur Liste</button>
-    <button id="btnMenu" class="btn ghost" title="Menü">⋯</button>
+    <button id="btnMenu" class="btn ghost icon-only" title="Menü" aria-label="Menü"><span data-icon="more"></span></button>
     <div class="menu hidden" id="menu">
-      <button data-act="addProduct">+ Produkt hinzufügen</button>
-      <button data-act="addSection">+ Abschnitt hinzufügen</button>
-      <button data-act="archive">🕘 Archiv</button>
-      <button data-act="stats">📊 Statistik</button>
+      <button data-act="addProduct"><span data-icon="plus"></span>Produkt hinzufügen</button>
+      <button data-act="addSection"><span data-icon="plus"></span>Abschnitt hinzufügen</button>
+      <button data-act="archive"><span data-icon="archive"></span>Archiv</button>
+      <button data-act="stats"><span data-icon="chart"></span>Statistik</button>
+      <hr>
       <button data-act="clearMarks">Markierungen löschen (ohne Archiv)</button>
       <button data-act="export">Liste exportieren (Text)</button>
       <button data-act="backup">Backup (JSON) speichern</button>
@@ -40,17 +41,16 @@
 
 <main id="list"></main>
 
-<button class="fab" id="fab" title="Produkt hinzufügen">+</button>
+<button class="fab" id="fab" title="Produkt hinzufügen" aria-label="Produkt hinzufügen"><span data-icon="plus"></span></button>
 
-<!-- Einkauf: Datum + Supermarkt -->
 <dialog id="dlgTrip">
   <form method="dialog" id="formTrip">
     <h2 id="dlgTripTitle">Neuer Einkauf</h2>
     <p id="tripInfo" class="info hidden"></p>
-    <label>Datum
+    <label><span class="lbl"><span data-icon="calendar"></span>Datum</span>
       <input type="date" id="tDate" required>
     </label>
-    <label>Supermarkt
+    <label><span class="lbl"><span data-icon="store"></span>Supermarkt</span>
       <select id="tStore" required></select>
     </label>
     <label id="tOtherWrap" class="hidden">Name des Supermarkts
@@ -126,6 +126,7 @@
 <input type="file" id="fileInput" accept="application/json" hidden>
 <div id="toast" class="toast hidden"></div>
 
+<script src="icons.js"></script>
 <script src="app.js"></script>
 <script>
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
