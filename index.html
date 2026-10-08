@@ -17,8 +17,9 @@
   <div class="topbar-row">
     <h1>Einkaufszettel</h1>
     <span class="counter" id="counter">0 / 0</span>
-    <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neu starten">Neuer Einkauf</button>
+    <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neuen Einkauf starten">Neuer Einkauf</button>
   </div>
+  <button id="tripBar" class="trip-bar" title="Supermarkt und Datum ändern"></button>
   <div class="topbar-row tools">
     <input type="search" id="search" placeholder="Suchen…" autocomplete="off">
     <button id="btnOnlyNeeded" class="btn ghost" title="Nur markierte Produkte anzeigen">Nur Liste</button>
@@ -26,7 +27,8 @@
     <div class="menu hidden" id="menu">
       <button data-act="addProduct">+ Produkt hinzufügen</button>
       <button data-act="addSection">+ Abschnitt hinzufügen</button>
-      <button data-act="archive">🕘 Archiv anzeigen</button>
+      <button data-act="archive">🕘 Archiv</button>
+      <button data-act="stats">📊 Statistik</button>
       <button data-act="clearMarks">Markierungen löschen (ohne Archiv)</button>
       <button data-act="export">Liste exportieren (Text)</button>
       <button data-act="backup">Backup (JSON) speichern</button>
@@ -39,6 +41,27 @@
 <main id="list"></main>
 
 <button class="fab" id="fab" title="Produkt hinzufügen">+</button>
+
+<!-- Einkauf: Datum + Supermarkt -->
+<dialog id="dlgTrip">
+  <form method="dialog" id="formTrip">
+    <h2 id="dlgTripTitle">Neuer Einkauf</h2>
+    <p id="tripInfo" class="info hidden"></p>
+    <label>Datum
+      <input type="date" id="tDate" required>
+    </label>
+    <label>Supermarkt
+      <select id="tStore" required></select>
+    </label>
+    <label id="tOtherWrap" class="hidden">Name des Supermarkts
+      <input type="text" id="tOther" autocomplete="off" placeholder="z. B. Hofladen Müller">
+    </label>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary" type="submit" id="btnTripOk">Starten</button>
+    </menu>
+  </form>
+</dialog>
 
 <dialog id="dlgProduct">
   <form method="dialog" id="formProduct">
@@ -75,6 +98,13 @@
 <dialog id="dlgArchive">
   <form method="dialog">
     <h2>Archiv</h2>
+    <div class="archive-tools">
+      <div class="tabs">
+        <button type="button" class="tab" data-tab="list">Einkäufe</button>
+        <button type="button" class="tab" data-tab="stats">Statistik</button>
+      </div>
+      <select id="archiveFilter"></select>
+    </div>
     <div id="archiveBody" class="archive-body"></div>
     <menu>
       <button value="cancel" class="btn ghost" type="submit">Schließen</button>
@@ -84,7 +114,7 @@
 
 <dialog id="dlgText">
   <form method="dialog">
-    <h2 id="dlgTextTitle">Liste</h2>
+    <h2>Einkaufsliste</h2>
     <textarea id="txtArea" rows="14"></textarea>
     <menu>
       <button value="cancel" class="btn ghost" type="submit">Schließen</button>

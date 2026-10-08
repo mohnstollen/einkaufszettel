@@ -1,6 +1,9 @@
 /* Einkaufszettel PWA – Daten in localStorage */
-const KEY = 'einkaufszettel.v2';
-const OLDKEY = 'einkaufszettel.v1';
+const KEY = 'einkaufszettel.v3';
+const OLDKEYS = ['einkaufszettel.v2', 'einkaufszettel.v1'];
+
+const STORES = ['Aldi','Lidl','Edeka','Norma','REWE','Kaufland','Netto','Penny','Marktkauf','Globus'];
+const OTHER = 'Anderer';
 
 const DEFAULTS = [
   ['Obst & Gemüse', ['Bananen','Äpfel','Karotten','Kartoffeln','Zitrone','Paprika','Gurke']],
@@ -14,6 +17,10 @@ const DEFAULTS = [
 ];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+const todayISO = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
 
 function defaultState() {
   return {
@@ -21,6 +28,8 @@ function defaultState() {
       id: uid(), name, collapsed: false,
       products: products.map(n => ({ id: uid(), name: n, needed: false, done: false, note: '' }))
     })),
+    trip: null,          // { date: 'YYYY-MM-DD', store: 'Lidl' }
+    lastStore: '',
     onlyNeeded: false,
     archive: []
   };
@@ -29,23 +38,36 @@ function defaultState() {
 let state = load();
 let editing = null;
 let editingSection = null;
+let tripDialogMode = 'new';   // 'new' | 'edit'
 
+/* ---------- Laden / Migration ---------- */
+function migrate(s) {
+  s.sections.forEach(sec => sec.products.forEach(p => {
+    if (p.needed === undefined) p.needed = !!p.checked;
+    if (p.done === undefined) p.done = false;
+    delete p.checked;
+  }));
+  if (s.onlyNeeded === undefined) s.onlyNeeded = !!s.onlyChecked;
+  delete s.onlyChecked;
+  if (!Array.isArray(s.archive)) s.archive = [];
+  s.archive.forEach(t => {
+    // v2-Einträge: nur "date" (Zeitstempel der Archivierung) vorhanden
+    if (!t.archivedAt) t.archivedAt = t.date;
+    if (!t.tripDate) t.tripDate = (t.date || '').slice(0, 10);
+    if (!t.store) t.store = 'Unbekannt';
+  });
+  if (s.trip === undefined) s.trip = null;
+  if (s.lastStore === undefined) s.lastStore = '';
+  return s;
+}
 function load() {
   try {
-    const raw = localStorage.getItem(KEY) || localStorage.getItem(OLDKEY);
+    let raw = localStorage.getItem(KEY);
+    for (const k of OLDKEYS) if (!raw) raw = localStorage.getItem(k);
     if (!raw) return defaultState();
     const s = JSON.parse(raw);
     if (!s || !Array.isArray(s.sections)) return defaultState();
-    // Migration v1 -> v2
-    s.sections.forEach(sec => sec.products.forEach(p => {
-      if (p.needed === undefined) p.needed = !!p.checked;
-      if (p.done === undefined) p.done = false;
-      delete p.checked;
-    }));
-    if (s.onlyNeeded === undefined) s.onlyNeeded = !!s.onlyChecked;
-    delete s.onlyChecked;
-    if (!Array.isArray(s.archive)) s.archive = [];
-    return s;
+    return migrate(s);
   } catch { return defaultState(); }
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
@@ -53,10 +75,33 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catc
 const $ = sel => document.querySelector(sel);
 const listEl = $('#list');
 
-/* Sortierung: benötigt (offen) → benötigt (erledigt) → Rest alphabetisch */
+/* ---------- Formatierung ---------- */
+const fmtDay = iso => {
+  if (!iso) return '–';
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+const fmtStamp = iso => iso ? new Date(iso).toLocaleString('de-DE',
+  { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '–';
+
+/* ---------- Rendering Liste ---------- */
 function rank(p) { return p.needed ? (p.done ? 1 : 0) : 2; }
 
+function renderTripBar() {
+  const bar = $('#tripBar');
+  if (state.trip) {
+    bar.innerHTML = '<span>🏪 <b></b></span><span>📅 <span class="d"></span></span><span class="edit">✎</span>';
+    bar.querySelector('b').textContent = state.trip.store;
+    bar.querySelector('.d').textContent = fmtDay(state.trip.date);
+    bar.classList.remove('empty-trip');
+  } else {
+    bar.innerHTML = '<span>Kein Supermarkt/Datum gewählt – hier tippen</span>';
+    bar.classList.add('empty-trip');
+  }
+}
+
 function render() {
+  renderTripBar();
   const q = $('#search').value.trim().toLowerCase();
   listEl.innerHTML = '';
   let needTotal = 0, doneTotal = 0;
@@ -78,16 +123,15 @@ function render() {
 
     const head = document.createElement('div');
     head.className = 'section-head';
-    const cntTxt = need.length
-      ? need.filter(p => p.done).length + ' / ' + need.length + ' erledigt'
-      : sec.products.length + ' Produkte';
-    head.innerHTML = '<span class="chev">▾</span><h2></h2>' +
-      '<span class="cnt"></span>' +
+    head.innerHTML = '<span class="chev">▾</span><h2></h2><span class="cnt"></span>' +
       '<button class="act" data-sec-edit title="Abschnitt bearbeiten">✎</button>' +
       '<button class="act del" data-sec-del title="Abschnitt löschen">🗑</button>';
     head.querySelector('h2').textContent = sec.name;
-    head.querySelector('.cnt').textContent = cntTxt;
-    if (need.length) head.querySelector('.cnt').classList.add('active');
+    const cnt = head.querySelector('.cnt');
+    cnt.textContent = need.length
+      ? need.filter(p => p.done).length + ' / ' + need.length + ' erledigt'
+      : sec.products.length + ' Produkte';
+    if (need.length) cnt.classList.add('active');
     head.addEventListener('click', e => {
       if (e.target.closest('[data-sec-edit]')) { openSection(sec); return; }
       if (e.target.closest('[data-sec-del]')) { delSection(sec); return; }
@@ -106,17 +150,12 @@ function render() {
       const li = document.createElement('li');
       li.className = 'item' + (p.needed ? ' needed' : '') + (p.needed && p.done ? ' done' : '');
 
-      // 1) Stern: auf die Einkaufsliste setzen
       const star = document.createElement('button');
       star.className = 'mark' + (p.needed ? ' on' : '');
       star.textContent = p.needed ? '★' : '☆';
       star.title = p.needed ? 'Vom Einkauf entfernen' : 'Zum Einkauf hinzufügen';
-      star.addEventListener('click', () => {
-        p.needed = !p.needed; if (!p.needed) p.done = false;
-        save(); render();
-      });
+      star.addEventListener('click', () => { p.needed = !p.needed; if (!p.needed) p.done = false; save(); render(); });
 
-      // 2) Haken: im Einkaufswagen
       const cart = document.createElement('button');
       cart.className = 'cart' + (p.done ? ' on' : '');
       cart.textContent = p.done ? '☑' : '☐';
@@ -129,11 +168,7 @@ function render() {
       const b = document.createElement('b'); b.textContent = p.name;
       nameWrap.appendChild(b);
       if (p.note) { const n = document.createElement('div'); n.className = 'note'; n.textContent = p.note; nameWrap.appendChild(n); }
-      // Tippen auf den Namen: nicht benötigt → markieren; benötigt → abhaken/zurück
-      nameWrap.addEventListener('click', () => {
-        if (!p.needed) p.needed = true; else p.done = !p.done;
-        save(); render();
-      });
+      nameWrap.addEventListener('click', () => { if (!p.needed) p.needed = true; else p.done = !p.done; save(); render(); });
 
       const edit = document.createElement('button');
       edit.className = 'act'; edit.textContent = '✎'; edit.title = 'Bearbeiten';
@@ -158,52 +193,148 @@ function render() {
   $('#btnOnlyNeeded').classList.toggle('on', state.onlyNeeded);
 }
 
-/* ---------- Neuer Einkauf + Archiv ---------- */
-function newTrip() {
+/* ---------- Einkauf-Dialog (Datum + Supermarkt) ---------- */
+function fillStoreSelect(sel, current) {
+  sel.innerHTML = '<option value="" disabled>Bitte wählen…</option>';
+  [...STORES, OTHER].forEach(s => {
+    const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o);
+  });
+  if (!current) { sel.value = ''; return ''; }
+  if (STORES.includes(current)) { sel.value = current; return ''; }
+  sel.value = OTHER; return current;   // eigener Name
+}
+function toggleOther() {
+  const isOther = $('#tStore').value === OTHER;
+  $('#tOtherWrap').classList.toggle('hidden', !isOther);
+  $('#tOther').required = isOther;
+}
+$('#tStore').addEventListener('change', () => { toggleOther(); if ($('#tStore').value === OTHER) $('#tOther').focus(); });
+
+function currentMarkedEntries() {
   const entries = [];
   state.sections.forEach(s => {
     const need = s.products.filter(p => p.needed);
-    if (need.length) entries.push({
-      section: s.name,
-      items: need.map(p => ({ name: p.name, note: p.note || '', done: !!p.done }))
-    });
+    if (need.length) entries.push({ section: s.name, items: need.map(p => ({ name: p.name, note: p.note || '', done: !!p.done })) });
   });
-
-  if (!entries.length) {
-    if (!confirm('Es ist nichts markiert. Trotzdem neuen Einkauf starten?')) return;
-  } else {
-    const total = entries.reduce((n, e) => n + e.items.length, 0);
-    const done = entries.reduce((n, e) => n + e.items.filter(i => i.done).length, 0);
-    if (!confirm('Aktuelle Liste (' + done + ' / ' + total + ' erledigt) archivieren und neuen Einkauf starten?')) return;
-    state.archive.unshift({ id: uid(), date: new Date().toISOString(), entries });
-    state.archive = state.archive.slice(0, 50);
-  }
-
-  // Markierungen löschen – Produkte selbst bleiben erhalten
-  state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
-  state.onlyNeeded = false;
-  save(); render();
-  toast(entries.length ? 'Archiviert – neuer Einkauf gestartet' : 'Neuer Einkauf gestartet');
+  return entries;
 }
 
-const fmtDate = iso => new Date(iso).toLocaleString('de-DE',
-  { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+function openTripDialog(mode) {
+  tripDialogMode = mode;
+  const isNew = mode === 'new';
+  $('#dlgTripTitle').textContent = isNew ? 'Neuer Einkauf' : (state.trip ? 'Einkauf bearbeiten' : 'Wo und wann kaufst du ein?');
+  $('#btnTripOk').textContent = isNew ? 'Starten' : 'Speichern';
 
-function openArchive() {
+  const base = isNew ? { date: todayISO(), store: state.lastStore } : (state.trip || { date: todayISO(), store: state.lastStore });
+  $('#tDate').value = base.date;
+  $('#tOther').value = fillStoreSelect($('#tStore'), base.store);
+  toggleOther();
+
+  const info = $('#tripInfo');
+  const entries = currentMarkedEntries();
+  if (isNew && entries.length) {
+    const total = entries.reduce((n, e) => n + e.items.length, 0);
+    const done = entries.reduce((n, e) => n + e.items.filter(i => i.done).length, 0);
+    info.textContent = 'Die aktuelle Liste (' + done + ' / ' + total + ' erledigt' +
+      (state.trip ? ', ' + state.trip.store + ', ' + fmtDay(state.trip.date) : '') +
+      ') wird archiviert. Deine Produkte bleiben erhalten.';
+    info.classList.remove('hidden');
+  } else info.classList.add('hidden');
+
+  $('#dlgTrip').showModal();
+}
+
+$('#formTrip').addEventListener('submit', e => {
+  if (!(e.submitter && e.submitter.value === 'ok')) return;
+  const date = $('#tDate').value;
+  let store = $('#tStore').value;
+  if (store === OTHER) store = $('#tOther').value.trim();
+  if (!date || !store) { e.preventDefault(); toast('Bitte Datum und Supermarkt angeben'); return; }
+
+  if (tripDialogMode === 'new') {
+    const entries = currentMarkedEntries();
+    if (entries.length) {
+      state.archive.unshift({
+        id: uid(),
+        store: state.trip ? state.trip.store : 'Unbekannt',
+        tripDate: state.trip ? state.trip.date : todayISO(),
+        archivedAt: new Date().toISOString(),
+        entries
+      });
+      state.archive = state.archive.slice(0, 100);
+    }
+    state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
+    state.onlyNeeded = false;
+    toast(entries.length ? 'Archiviert – neuer Einkauf bei ' + store : 'Neuer Einkauf bei ' + store);
+  } else {
+    toast('Einkauf aktualisiert');
+  }
+  state.trip = { date, store };
+  state.lastStore = store;
+  save(); render();
+});
+
+$('#tripBar').addEventListener('click', () => openTripDialog('edit'));
+$('#btnNewTrip').addEventListener('click', () => openTripDialog('new'));
+
+/* ---------- Archiv ---------- */
+let archiveFilter = '';
+let archiveTab = 'list';
+
+function tripCounts(trip) {
+  const total = trip.entries.reduce((n, e) => n + e.items.length, 0);
+  const done = trip.entries.reduce((n, e) => n + e.items.filter(i => i.done).length, 0);
+  return { total, done };
+}
+function filteredArchive() {
+  return state.archive.filter(t => !archiveFilter || t.store === archiveFilter);
+}
+function fillArchiveFilter() {
+  const sel = $('#archiveFilter');
+  const stores = [...new Set(state.archive.map(t => t.store))]
+    .sort((a, b) => a.localeCompare(b, 'de'));
+  sel.innerHTML = '<option value="">Alle Märkte (' + state.archive.length + ')</option>';
+  stores.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s + ' (' + state.archive.filter(t => t.store === s).length + ')';
+    sel.appendChild(o);
+  });
+  if (archiveFilter && !stores.includes(archiveFilter)) archiveFilter = '';
+  sel.value = archiveFilter;
+}
+$('#archiveFilter').addEventListener('change', e => { archiveFilter = e.target.value; renderArchive(); });
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  archiveTab = t.dataset.tab; renderArchive();
+}));
+
+function openArchive() { fillArchiveFilter(); renderArchive(); $('#dlgArchive').showModal(); }
+
+function renderArchive() {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === archiveTab));
   const box = $('#archiveBody');
   box.innerHTML = '';
-  if (!state.archive.length) {
-    box.innerHTML = '<div class="empty">Noch keine archivierten Einkäufe.</div>';
-  }
-  state.archive.forEach(trip => {
-    const total = trip.entries.reduce((n, e) => n + e.items.length, 0);
-    const done = trip.entries.reduce((n, e) => n + e.items.filter(i => i.done).length, 0);
+  const trips = filteredArchive();
+  if (!trips.length) { box.innerHTML = '<div class="empty">Noch keine archivierten Einkäufe.</div>'; return; }
+  if (archiveTab === 'stats') renderStats(box, trips);
+  else renderTripList(box, trips);
+}
+
+function renderTripList(box, trips) {
+  trips.forEach(trip => {
+    const { total, done } = tripCounts(trip);
     const det = document.createElement('details');
     det.className = 'trip';
     const sum = document.createElement('summary');
-    sum.innerHTML = '<span class="trip-date"></span><span class="trip-cnt">' + done + ' / ' + total + '</span>';
-    sum.querySelector('.trip-date').textContent = fmtDate(trip.date);
+    sum.innerHTML = '<div class="trip-main"><span class="trip-store"></span><span class="trip-date"></span></div>' +
+      '<span class="trip-cnt">' + done + ' / ' + total + ' erledigt</span>';
+    sum.querySelector('.trip-store').textContent = trip.store;
+    sum.querySelector('.trip-date').textContent = fmtDay(trip.tripDate);
     det.appendChild(sum);
+
+    const meta = document.createElement('div');
+    meta.className = 'trip-meta';
+    meta.textContent = 'Archiviert am ' + fmtStamp(trip.archivedAt);
+    det.appendChild(meta);
 
     trip.entries.forEach(e => {
       const h = document.createElement('div'); h.className = 'trip-sec'; h.textContent = e.section;
@@ -221,36 +352,103 @@ function openArchive() {
     const actions = document.createElement('div');
     actions.className = 'trip-actions';
     const reuse = document.createElement('button');
-    reuse.className = 'btn'; reuse.textContent = 'Als neue Liste übernehmen';
+    reuse.type = 'button'; reuse.className = 'btn'; reuse.textContent = 'Liste erneut verwenden';
     reuse.addEventListener('click', () => reuseTrip(trip));
     const rm = document.createElement('button');
-    rm.className = 'btn ghost'; rm.textContent = 'Löschen';
+    rm.type = 'button'; rm.className = 'btn ghost'; rm.textContent = 'Löschen';
     rm.addEventListener('click', () => {
       if (!confirm('Diesen Einkauf aus dem Archiv löschen?')) return;
       state.archive = state.archive.filter(t => t.id !== trip.id);
-      save(); openArchive();
+      save(); fillArchiveFilter(); renderArchive();
     });
     actions.append(reuse, rm);
     det.appendChild(actions);
     box.appendChild(det);
   });
-  $('#dlgArchive').showModal();
+}
+
+function renderStats(box, trips) {
+  const counts = new Map();
+  trips.forEach(t => {
+    const seen = new Set();
+    t.entries.forEach(e => e.items.forEach(i => {
+      const k = i.name.trim();
+      if (seen.has(k.toLowerCase())) return;
+      seen.add(k.toLowerCase());
+      const c = counts.get(k.toLowerCase()) || { name: k, listed: 0, bought: 0 };
+      c.listed++; if (i.done) c.bought++;
+      counts.set(k.toLowerCase(), c);
+    }));
+  });
+  const top = [...counts.values()].sort((a, b) => b.listed - a.listed || b.bought - a.bought || a.name.localeCompare(b.name, 'de')).slice(0, 20);
+
+  const last = trips.reduce((a, t) => (!a || t.tripDate > a.tripDate ? t : a), null);
+  const head = document.createElement('div');
+  head.className = 'stats-head';
+  head.innerHTML = '<div><b>' + trips.length + '</b><span>Einkäufe</span></div>' +
+    '<div><b>' + counts.size + '</b><span>versch. Produkte</span></div>' +
+    '<div><b class="last"></b><span>letzter Einkauf</span></div>';
+  head.querySelector('.last').textContent = last ? fmtDay(last.tripDate).replace(/^\w+\.,\s*/, '') : '–';
+  box.appendChild(head);
+
+  if (!archiveFilter) {
+    // Einkäufe pro Markt
+    const perStore = {};
+    trips.forEach(t => perStore[t.store] = (perStore[t.store] || 0) + 1);
+    const h = document.createElement('div'); h.className = 'trip-sec'; h.textContent = 'Einkäufe pro Markt';
+    box.appendChild(h);
+    box.appendChild(barTable(Object.entries(perStore).sort((a, b) => b[1] - a[1]).map(([n, v]) => ({ name: n, value: v, label: v + '×' }))));
+  }
+
+  const h2 = document.createElement('div'); h2.className = 'trip-sec';
+  h2.textContent = 'Häufigste Produkte' + (archiveFilter ? ' bei ' + archiveFilter : '');
+  box.appendChild(h2);
+  box.appendChild(barTable(top.map(c => ({ name: c.name, value: c.listed, label: c.listed + '×' + (c.bought !== c.listed ? ' (' + c.bought + ' gekauft)' : '') }))));
+
+  const hint = document.createElement('div'); hint.className = 'trip-meta';
+  hint.textContent = 'Zählt, wie oft ein Produkt auf einer archivierten Liste stand.';
+  box.appendChild(hint);
+}
+function barTable(rows) {
+  const wrap = document.createElement('div'); wrap.className = 'bars';
+  const max = Math.max(1, ...rows.map(r => r.value));
+  rows.forEach(r => {
+    const row = document.createElement('div'); row.className = 'bar-row';
+    row.innerHTML = '<span class="bar-name"></span><span class="bar"><i style="width:' + (r.value / max * 100) + '%"></i></span><span class="bar-val"></span>';
+    row.querySelector('.bar-name').textContent = r.name;
+    row.querySelector('.bar-val').textContent = r.label;
+    wrap.appendChild(row);
+  });
+  return wrap;
 }
 
 function reuseTrip(trip) {
-  if (!confirm('Aktuelle Markierungen ersetzen?')) return;
+  const hasMarks = currentMarkedEntries().length;
+  if (hasMarks && !confirm('Aktuelle Markierungen durch diese Liste ersetzen? (Die aktuelle Liste wird nicht archiviert.)')) return;
   state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
-  let missing = 0;
+  let created = 0;
   trip.entries.forEach(e => {
-    const sec = state.sections.find(s => s.name === e.section) || state.sections[state.sections.length - 1];
+    let sec = state.sections.find(s => s.name === e.section);
+    if (!sec) { sec = { id: uid(), name: e.section, collapsed: false, products: [] }; state.sections.push(sec); }
     e.items.forEach(i => {
       const p = sec.products.find(x => x.name.toLowerCase() === i.name.toLowerCase());
       if (p) { p.needed = true; p.done = false; }
-      else { sec.products.push({ id: uid(), name: i.name, note: i.note, needed: true, done: false }); missing++; }
+      else { sec.products.push({ id: uid(), name: i.name, note: i.note, needed: true, done: false }); created++; }
     });
   });
   save(); render(); $('#dlgArchive').close();
-  toast('Liste übernommen' + (missing ? ' (' + missing + ' neu angelegt)' : ''));
+  toast('Liste übernommen' + (created ? ' (' + created + ' Produkte neu angelegt)' : ''));
+  // Markt + Datum für den neuen Einkauf festlegen
+  setTimeout(() => {
+    tripDialogMode = 'edit';
+    $('#dlgTripTitle').textContent = 'Wo und wann kaufst du ein?';
+    $('#btnTripOk').textContent = 'Übernehmen';
+    $('#tDate').value = todayISO();
+    $('#tOther').value = fillStoreSelect($('#tStore'), trip.store !== 'Unbekannt' ? trip.store : state.lastStore);
+    toggleOther();
+    $('#tripInfo').classList.add('hidden');
+    $('#dlgTrip').showModal();
+  }, 150);
 }
 
 /* ---------- Produkt-Dialog ---------- */
@@ -260,9 +458,7 @@ function openProduct(sec, product) {
   const sel = $('#pSection');
   sel.innerHTML = '';
   state.sections.forEach(s => {
-    const o = document.createElement('option');
-    o.value = s.id; o.textContent = s.name;
-    sel.appendChild(o);
+    const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o);
   });
   sel.value = sec ? sec.id : (state.sections[0] || {}).id;
   $('#pName').value = product ? product.name : '';
@@ -270,23 +466,17 @@ function openProduct(sec, product) {
   $('#dlgProduct').showModal();
   setTimeout(() => $('#pName').focus(), 50);
 }
-
 $('#formProduct').addEventListener('submit', e => {
-  const ok = e.submitter && e.submitter.value === 'ok';
-  if (!ok) { editing = null; return; }
+  if (!(e.submitter && e.submitter.value === 'ok')) { editing = null; return; }
   const name = $('#pName').value.trim();
   if (!name) { e.preventDefault(); return; }
   const note = $('#pNote').value.trim();
   const target = state.sections.find(s => s.id === $('#pSection').value);
-
   if (editing) {
     const src = state.sections.find(s => s.id === editing.sectionId);
     const p = src.products.find(x => x.id === editing.productId);
     p.name = name; p.note = note;
-    if (src.id !== target.id) {
-      src.products = src.products.filter(x => x.id !== p.id);
-      target.products.push(p);
-    }
+    if (src.id !== target.id) { src.products = src.products.filter(x => x.id !== p.id); target.products.push(p); }
     toast('Gespeichert');
   } else {
     const dupe = target.products.find(p => p.name.toLowerCase() === name.toLowerCase());
@@ -310,8 +500,7 @@ function delSection(sec) {
   save(); render(); toast('Abschnitt gelöscht');
 }
 $('#formSection').addEventListener('submit', e => {
-  const ok = e.submitter && e.submitter.value === 'ok';
-  if (!ok) { editingSection = null; return; }
+  if (!(e.submitter && e.submitter.value === 'ok')) { editingSection = null; return; }
   const name = $('#sName').value.trim();
   if (!name) { e.preventDefault(); return; }
   if (editingSection) editingSection.name = name;
@@ -327,14 +516,11 @@ $('#menu').addEventListener('click', e => {
   $('#menu').classList.add('hidden');
   ({ addProduct: () => openProduct(state.sections[0], null),
      addSection: () => openSection(null),
-     archive: openArchive,
-     clearMarks: clearMarks,
-     export: exportText,
-     backup: backupJSON,
-     restore: () => $('#fileInput').click(),
-     reset: resetAll })[act]();
+     archive: () => { archiveTab = 'list'; openArchive(); },
+     stats: () => { archiveTab = 'stats'; openArchive(); },
+     clearMarks, export: exportText, backup: backupJSON,
+     restore: () => $('#fileInput').click(), reset: resetAll })[act]();
 });
-$('#btnNewTrip').addEventListener('click', newTrip);
 $('#fab').addEventListener('click', () => openProduct(state.sections[0], null));
 $('#search').addEventListener('input', render);
 $('#btnOnlyNeeded').addEventListener('click', () => { state.onlyNeeded = !state.onlyNeeded; save(); render(); });
@@ -349,7 +535,8 @@ function resetAll() {
   state = defaultState(); save(); render(); toast('Zurückgesetzt');
 }
 function exportText() {
-  const lines = ['Einkaufszettel – ' + fmtDate(new Date().toISOString()), ''];
+  const head = state.trip ? state.trip.store + ' – ' + fmtDay(state.trip.date) : 'Einkaufszettel';
+  const lines = [head, ''];
   state.sections.forEach(s => {
     const need = s.products.filter(p => p.needed);
     if (!need.length) return;
@@ -359,7 +546,6 @@ function exportText() {
     lines.push('');
   });
   const txt = lines.length > 2 ? lines.join('\n').trim() : 'Nichts markiert.';
-  $('#dlgTextTitle').textContent = 'Einkaufsliste';
   $('#txtArea').value = txt;
   $('#btnTextOk').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => toast('Kopiert')); };
   $('#dlgText').showModal();
@@ -368,7 +554,7 @@ function backupJSON() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'einkaufszettel-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.download = 'einkaufszettel-' + todayISO() + '.json';
   a.click(); URL.revokeObjectURL(a.href);
 }
 $('#fileInput').addEventListener('change', async e => {
@@ -376,13 +562,7 @@ $('#fileInput').addEventListener('change', async e => {
   try {
     const s = JSON.parse(await f.text());
     if (!Array.isArray(s.sections)) throw new Error('Format');
-    if (!Array.isArray(s.archive)) s.archive = [];
-    s.sections.forEach(sec => sec.products.forEach(p => {
-      if (p.needed === undefined) p.needed = !!p.checked;
-      if (p.done === undefined) p.done = false;
-      delete p.checked;
-    }));
-    state = s; save(); render(); toast('Backup geladen');
+    state = migrate(s); save(); render(); toast('Backup geladen');
   } catch { alert('Datei konnte nicht gelesen werden.'); }
   e.target.value = '';
 });
@@ -390,7 +570,8 @@ $('#fileInput').addEventListener('change', async e => {
 let toastTimer;
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 1800);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2000);
 }
 
 render();
+if (!state.trip) setTimeout(() => openTripDialog('edit'), 300);
