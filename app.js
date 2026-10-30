@@ -1,8 +1,13 @@
 /* Einkaufszettel PWA – Daten in localStorage */
-const KEY = 'einkaufszettel.v3';
-const OLDKEYS = ['einkaufszettel.v2', 'einkaufszettel.v1'];
+const KEY = 'einkaufszettel.v4';
+const OLDKEYS = ['einkaufszettel.v3', 'einkaufszettel.v2', 'einkaufszettel.v1'];
 
-const STORES = ['Aldi','Lidl','Edeka','Norma','REWE','Kaufland','Netto','Penny','Marktkauf','Globus'];
+const STORE_GROUPS = [
+  ['Lebensmittel', ['Aldi','Lidl','Edeka','Norma','REWE','Kaufland','Netto','Penny','Marktkauf','Globus']],
+  ['Drogerie', ['dm','Rossmann','Müller']],
+  ['Baumarkt', ['OBI','Hornbach','Bauhaus','toom','hagebau']]
+];
+const STORES = STORE_GROUPS.flatMap(g => g[1]);
 const OTHER = 'Anderer';
 
 const DEFAULTS = [
@@ -22,17 +27,21 @@ const todayISO = () => {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-function defaultState() {
+function newList(name, template) {
   return {
-    sections: DEFAULTS.map(([name, products]) => ({
-      id: uid(), name, collapsed: false,
+    id: uid(), name,
+    sections: template !== 'food' ? [] : DEFAULTS.map(([sec, products]) => ({
+      id: uid(), name: sec, collapsed: false,
       products: products.map(n => ({ id: uid(), name: n, needed: false, done: false, note: '' }))
     })),
     trip: null, lastStore: '', onlyNeeded: false, archive: []
   };
 }
+function defaultDb() { return { lists: [newList('Lebensmittel', 'food')] }; }
 
-let state = load();
+let db = load();
+let state = null; // gerade geöffnete Liste (null = Übersicht)
+let fromHome = false;
 let editing = null;
 let editingSection = null;
 let tripDialogMode = 'new';
@@ -54,19 +63,24 @@ function migrate(s) {
   });
   if (s.trip === undefined) s.trip = null;
   if (s.lastStore === undefined) s.lastStore = '';
+  if (!s.id) s.id = uid();
+  if (!s.name) s.name = 'Lebensmittel';
   return s;
+}
+/* Aktuelles Format { lists: [...] } oder alte Einzelliste { sections: [...] } */
+function toDb(s) {
+  if (s && Array.isArray(s.lists)) return { lists: s.lists.filter(l => l && Array.isArray(l.sections)).map(migrate) };
+  if (s && Array.isArray(s.sections)) return { lists: [migrate(s)] };
+  return null;
 }
 function load() {
   try {
     let raw = localStorage.getItem(KEY);
     for (const k of OLDKEYS) if (!raw) raw = localStorage.getItem(k);
-    if (!raw) return defaultState();
-    const s = JSON.parse(raw);
-    if (!s || !Array.isArray(s.sections)) return defaultState();
-    return migrate(s);
-  } catch { return defaultState(); }
+    return (raw && toDb(JSON.parse(raw))) || defaultDb();
+  } catch { return defaultDb(); }
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} }
 
 const $ = sel => document.querySelector(sel);
 const listEl = $('#list');
@@ -84,6 +98,97 @@ function iconBtn(cls, icon, title) {
   b.type = 'button'; b.className = cls; b.innerHTML = ICON[icon]; b.title = title;
   b.setAttribute('aria-label', title);
   return b;
+}
+
+/* ---------- Übersicht ---------- */
+function refresh() { if (state) render(); else renderHome(); }
+
+function route() {
+  const m = location.hash.match(/^#\/liste\/(.+)$/);
+  state = m ? db.lists.find(l => l.id === m[1]) || null : null;
+  if (!state) fromHome = false;
+  $('#viewHome').classList.toggle('hidden', !!state);
+  $('#viewList').classList.toggle('hidden', !state);
+  $('#fab').title = state ? 'Produkt hinzufügen' : 'Neue Liste';
+  $('#fab').setAttribute('aria-label', $('#fab').title);
+  $('#search').value = '';
+  archiveFilter = '';
+  document.querySelectorAll('dialog[open]').forEach(d => d.close());
+  closeMenus();
+  if (!state) document.title = 'Einkaufszettel';
+  refresh();
+  window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', route);
+function openList(id) { fromHome = true; location.hash = '#/liste/' + id; }
+$('#btnBack').addEventListener('click', () => { if (fromHome) history.back(); else location.hash = ''; });
+
+function renderHome() {
+  const box = $('#home');
+  box.innerHTML = '';
+  if (!db.lists.length) { box.innerHTML = '<div class="empty">Noch keine Listen. Tippe auf +, um eine anzulegen.</div>'; return; }
+  const wrap = document.createElement('div');
+  wrap.className = 'lists';
+  db.lists.forEach(list => {
+    let products = 0, need = 0, done = 0;
+    list.sections.forEach(s => s.products.forEach(p => { products++; if (p.needed) { need++; if (p.done) done++; } }));
+
+    const card = document.createElement('div');
+    card.className = 'list-card';
+    const main = document.createElement('button');
+    main.type = 'button'; main.className = 'lc-main';
+    main.innerHTML = '<b class="lc-name"></b><span class="lc-sub"></span>';
+    main.querySelector('.lc-name').textContent = list.name;
+    const sub = main.querySelector('.lc-sub');
+    const store = list.trip ? list.trip.store : list.lastStore;
+    if (store) {
+      const st = document.createElement('span'); st.className = 'tb-item';
+      st.innerHTML = ICON.store; st.append(store); sub.appendChild(st);
+    }
+    const info = document.createElement('span');
+    info.textContent = products ? products + (products === 1 ? ' Produkt' : ' Produkte') : 'Leer';
+    sub.appendChild(info);
+    main.addEventListener('click', () => openList(list.id));
+    card.appendChild(main);
+
+    if (need) {
+      const c = document.createElement('span'); c.className = 'counter';
+      c.textContent = done + ' / ' + need; c.title = 'im Wagen / auf der Liste';
+      card.appendChild(c);
+    }
+    const ed = iconBtn('act', 'edit', 'Liste umbenennen');
+    ed.addEventListener('click', () => openListDialog(list));
+    const del = iconBtn('act del', 'trash', 'Liste löschen');
+    del.addEventListener('click', () => delList(list));
+    card.append(ed, del);
+    wrap.appendChild(card);
+  });
+  box.appendChild(wrap);
+}
+
+let editingList = null;
+function openListDialog(list) {
+  editingList = list || null;
+  $('#dlgListTitle').textContent = list ? 'Liste umbenennen' : 'Neue Liste';
+  $('#lName').value = list ? list.name : '';
+  $('#lTemplate').value = 'empty';
+  $('#lTemplateWrap').classList.toggle('hidden', !!list);
+  $('#dlgList').showModal();
+  setTimeout(() => $('#lName').focus(), 50);
+}
+$('#formList').addEventListener('submit', e => {
+  if (!(e.submitter && e.submitter.value === 'ok')) { editingList = null; return; }
+  const name = $('#lName').value.trim();
+  if (!name) { e.preventDefault(); return; }
+  if (editingList) { editingList.name = name; save(); refresh(); toast('Gespeichert'); }
+  else { const list = newList(name, $('#lTemplate').value); db.lists.push(list); save(); openList(list.id); }
+  editingList = null;
+});
+function delList(list) {
+  const n = list.archive.length;
+  if (!confirm('Liste „' + list.name + '“' + (n ? ' samt ' + n + ' archivierten Einkäufen' : '') + ' löschen?')) return;
+  db.lists = db.lists.filter(l => l.id !== list.id);
+  save(); renderHome(); toast('Liste gelöscht');
 }
 
 /* ---------- Rendering ---------- */
@@ -106,6 +211,8 @@ function renderTripBar() {
 }
 
 function render() {
+  $('#listTitle').textContent = state.name;
+  document.title = state.name + ' – Einkaufszettel';
   renderTripBar();
   const q = $('#search').value.trim().toLowerCase();
   listEl.innerHTML = '';
@@ -184,7 +291,8 @@ function render() {
     listEl.appendChild(secEl);
   });
 
-  if (!listEl.children.length) listEl.innerHTML = '<div class="empty">Nichts gefunden.</div>';
+  if (!listEl.children.length) listEl.innerHTML = '<div class="empty">' + (state.sections.length || q
+    ? 'Nichts gefunden.' : 'Diese Liste ist noch leer. Tippe auf +, um ein Produkt hinzuzufügen.') + '</div>';
   $('#counter').textContent = doneTotal + ' / ' + needTotal;
   $('#btnOnlyNeeded').classList.toggle('on', state.onlyNeeded);
 }
@@ -192,9 +300,13 @@ function render() {
 /* ---------- Einkauf-Dialog ---------- */
 function fillStoreSelect(sel, current) {
   sel.innerHTML = '<option value="" disabled>Bitte wählen…</option>';
-  [...STORES, OTHER].forEach(s => {
-    const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o);
+  const opt = s => { const o = document.createElement('option'); o.value = s; o.textContent = s; return o; };
+  STORE_GROUPS.forEach(([label, stores]) => {
+    const g = document.createElement('optgroup'); g.label = label;
+    stores.forEach(s => g.appendChild(opt(s)));
+    sel.appendChild(g);
   });
+  sel.appendChild(opt(OTHER));
   if (!current) { sel.value = ''; return ''; }
   if (STORES.includes(current)) { sel.value = current; return ''; }
   sel.value = OTHER; return current;
@@ -437,7 +549,8 @@ function openProduct(sec, product) {
   const sel = $('#pSection');
   sel.innerHTML = '';
   state.sections.forEach(s => { const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o); });
-  sel.value = sec ? sec.id : (state.sections[0] || {}).id;
+  if (!state.sections.length) { const o = document.createElement('option'); o.value = ''; o.textContent = 'Allgemein'; sel.appendChild(o); }
+  sel.value = sec ? sec.id : (state.sections[0] || { id: '' }).id;
   $('#pName').value = product ? product.name : '';
   $('#pNote').value = product ? (product.note || '') : '';
   $('#dlgProduct').showModal();
@@ -448,7 +561,8 @@ $('#formProduct').addEventListener('submit', e => {
   const name = $('#pName').value.trim();
   if (!name) { e.preventDefault(); return; }
   const note = $('#pNote').value.trim();
-  const target = state.sections.find(s => s.id === $('#pSection').value);
+  let target = state.sections.find(s => s.id === $('#pSection').value);
+  if (!target) { target = { id: uid(), name: 'Allgemein', collapsed: false, products: [] }; state.sections.push(target); }
   if (editing) {
     const src = state.sections.find(s => s.id === editing.sectionId);
     const p = src.products.find(x => x.id === editing.productId);
@@ -486,19 +600,27 @@ $('#formSection').addEventListener('submit', e => {
 });
 
 /* ---------- Menü & Aktionen ---------- */
+function closeMenus() { $('#menu').classList.add('hidden'); $('#homeMenu').classList.add('hidden'); }
 $('#btnMenu').addEventListener('click', e => { e.stopPropagation(); $('#menu').classList.toggle('hidden'); });
-document.addEventListener('click', () => $('#menu').classList.add('hidden'));
+$('#btnHomeMenu').addEventListener('click', e => { e.stopPropagation(); $('#homeMenu').classList.toggle('hidden'); });
+document.addEventListener('click', closeMenus);
 $('#menu').addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
-  $('#menu').classList.add('hidden');
+  closeMenus();
   ({ addProduct: () => openProduct(state.sections[0], null),
      addSection: () => openSection(null),
+     renameList: () => openListDialog(state),
      archive: () => { archiveTab = 'list'; openArchive(); },
      stats: () => { archiveTab = 'stats'; openArchive(); },
-     clearMarks, export: exportText, backup: backupJSON,
-     restore: () => $('#fileInput').click(), reset: resetAll })[btn.dataset.act]();
+     clearMarks, export: exportText })[btn.dataset.act]();
 });
-$('#fab').addEventListener('click', () => openProduct(state.sections[0], null));
+$('#homeMenu').addEventListener('click', e => {
+  const btn = e.target.closest('[data-act]'); if (!btn) return;
+  closeMenus();
+  ({ newList: () => openListDialog(null), backup: backupJSON,
+     restore: () => $('#fileInput').click() })[btn.dataset.act]();
+});
+$('#fab').addEventListener('click', () => state ? openProduct(state.sections[0], null) : openListDialog(null));
 $('#search').addEventListener('input', render);
 $('#btnOnlyNeeded').addEventListener('click', () => { state.onlyNeeded = !state.onlyNeeded; save(); render(); });
 
@@ -506,10 +628,6 @@ function clearMarks() {
   if (!confirm('Alle Markierungen entfernen, ohne zu archivieren?')) return;
   state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
   state.onlyNeeded = false; save(); render(); toast('Markierungen entfernt');
-}
-function resetAll() {
-  if (!confirm('Standardliste wiederherstellen? Eigene Produkte und das Archiv gehen verloren.')) return;
-  state = defaultState(); save(); render(); toast('Zurückgesetzt');
 }
 function exportText() {
   const head = state.trip ? state.trip.store + ' – ' + fmtDay(state.trip.date) : 'Einkaufszettel';
@@ -528,7 +646,7 @@ function exportText() {
   $('#dlgText').showModal();
 }
 function backupJSON() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ version: 4, lists: db.lists }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'einkaufszettel-' + todayISO() + '.json';
@@ -538,8 +656,18 @@ $('#fileInput').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
     const s = JSON.parse(await f.text());
-    if (!Array.isArray(s.sections)) throw new Error('Format');
-    state = migrate(s); save(); render(); toast('Backup geladen');
+    const data = toDb(s);
+    if (!data) throw new Error('Format');
+    if (Array.isArray(s.lists)) {
+      if (confirm('Alle Listen durch das Backup ersetzen (' + data.lists.length + ' Listen)?')) {
+        db = data; save(); renderHome(); toast('Backup geladen');
+      }
+    } else {
+      // Backup aus der Zeit vor mehreren Listen: als zusätzliche Liste übernehmen
+      const list = data.lists[0];
+      list.id = uid();
+      db.lists.push(list); save(); renderHome(); toast('Backup als Liste „' + list.name + '“ hinzugefügt');
+    }
   } catch { alert('Datei konnte nicht gelesen werden.'); }
   e.target.value = '';
 });
@@ -551,5 +679,4 @@ function toast(msg) {
 }
 
 applyIcons();
-render();
-if (!state.trip) setTimeout(() => openTripDialog('edit'), 300);
+route();

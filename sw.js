@@ -1,4 +1,4 @@
-const CACHE = 'einkaufszettel-v4';
+const CACHE = 'einkaufszettel-v5';
 const ASSETS = ['./','./index.html','./styles.css','./icons.js','./app.js','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

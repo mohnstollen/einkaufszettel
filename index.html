@@ -13,9 +13,27 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div id="viewHome" class="hidden">
 <header class="topbar">
   <div class="topbar-row">
-    <h1>Einkaufszettel</h1>
+    <h1>Meine Listen</h1>
+    <button id="btnHomeMenu" class="btn ghost icon-only" title="Menü" aria-label="Menü"><span data-icon="more"></span></button>
+    <div class="menu hidden" id="homeMenu">
+      <button data-act="newList"><span data-icon="plus"></span>Neue Liste</button>
+      <hr>
+      <button data-act="backup">Backup (JSON) speichern</button>
+      <button data-act="restore">Backup einlesen</button>
+    </div>
+  </div>
+</header>
+<main id="home"></main>
+</div>
+
+<div id="viewList" class="hidden">
+<header class="topbar">
+  <div class="topbar-row">
+    <button id="btnBack" class="btn ghost icon-only" title="Alle Listen" aria-label="Alle Listen"><span data-icon="back"></span></button>
+    <h1 id="listTitle">Einkaufszettel</h1>
     <span class="counter" id="counter">0 / 0</span>
     <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neuen Einkauf starten">Neuer Einkauf</button>
   </div>
@@ -27,21 +45,39 @@
     <div class="menu hidden" id="menu">
       <button data-act="addProduct"><span data-icon="plus"></span>Produkt hinzufügen</button>
       <button data-act="addSection"><span data-icon="plus"></span>Abschnitt hinzufügen</button>
+      <button data-act="renameList"><span data-icon="edit"></span>Liste umbenennen</button>
       <button data-act="archive"><span data-icon="archive"></span>Archiv</button>
       <button data-act="stats"><span data-icon="chart"></span>Statistik</button>
       <hr>
       <button data-act="clearMarks">Markierungen löschen (ohne Archiv)</button>
       <button data-act="export">Liste exportieren (Text)</button>
-      <button data-act="backup">Backup (JSON) speichern</button>
-      <button data-act="restore">Backup einlesen</button>
-      <button data-act="reset">Auf Standardliste zurücksetzen</button>
     </div>
   </div>
 </header>
 
 <main id="list"></main>
+</div>
 
 <button class="fab" id="fab" title="Produkt hinzufügen" aria-label="Produkt hinzufügen"><span data-icon="plus"></span></button>
+
+<dialog id="dlgList">
+  <form method="dialog" id="formList">
+    <h2 id="dlgListTitle">Neue Liste</h2>
+    <label>Name
+      <input type="text" id="lName" required autocomplete="off" placeholder="z. B. Drogerie, Baumarkt">
+    </label>
+    <label id="lTemplateWrap">Inhalt
+      <select id="lTemplate">
+        <option value="empty">Leere Liste</option>
+        <option value="food">Vorlage Lebensmittel</option>
+      </select>
+    </label>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary" type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
 
 <dialog id="dlgTrip">
   <form method="dialog" id="formTrip">
