@@ -21,6 +21,7 @@
     <div class="menu hidden" id="homeMenu">
       <button data-act="newList"><span data-icon="plus"></span>Neue Liste</button>
       <button data-act="orderLists"><span data-icon="sort"></span>Listen sortieren</button>
+      <button data-act="name"><span data-icon="user"></span>Mein Name</button>
       <hr>
       <button data-act="backup">Backup (JSON) speichern</button>
       <button data-act="restore">Backup einlesen</button>
@@ -35,6 +36,7 @@
   <div class="topbar-row">
     <button id="btnBack" class="btn ghost icon-only" title="Alle Listen" aria-label="Alle Listen"><span data-icon="back"></span></button>
     <h1 id="listTitle">Einkaufszettel</h1>
+    <button id="syncState" class="sync hidden" type="button"><span data-icon="share"></span></button>
     <span class="counter" id="counter">0 / 0</span>
     <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neuen Einkauf starten">Neuer Einkauf</button>
   </div>
@@ -47,6 +49,7 @@
       <button data-act="addProduct"><span data-icon="plus"></span>Produkt hinzufügen</button>
       <button data-act="addSection"><span data-icon="plus"></span>Abschnitt hinzufügen</button>
       <button data-act="orderSections"><span data-icon="sort"></span>Abschnitte sortieren</button>
+      <button data-act="share"><span data-icon="share"></span>Liste teilen</button>
       <button data-act="renameList"><span data-icon="edit"></span>Liste umbenennen</button>
       <button data-act="archive"><span data-icon="archive"></span>Archiv</button>
       <button data-act="stats"><span data-icon="chart"></span>Statistik</button>
@@ -130,6 +133,39 @@
     <menu>
       <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
       <button value="ok" class="btn primary" type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgName">
+  <form method="dialog" id="formName">
+    <h2>Wie heißt du?</h2>
+    <p class="info">Bei geteilten Listen sehen die anderen, welche Produkte von dir kommen.</p>
+    <label>Name
+      <input type="text" id="uName" autocomplete="given-name" maxlength="30" placeholder="z. B. Michael">
+    </label>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary" type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgShare">
+  <form method="dialog">
+    <h2>Liste teilen</h2>
+    <p class="info">Schicke diesen Link an deine Mitbewohner oder Familie. Wer ihn öffnet, sieht die Liste und kann sie
+      bearbeiten – Änderungen erscheinen sofort auf allen Geräten.</p>
+    <label>Einladungslink
+      <input type="text" id="shareLink" readonly>
+    </label>
+    <div class="share-actions">
+      <button type="button" class="btn primary" id="btnShareSend">Link senden…</button>
+      <button type="button" class="btn" id="btnShareCopy">Link kopieren</button>
+    </div>
+    <menu>
+      <button type="button" class="btn ghost danger" id="btnShareStop">Teilen beenden</button>
+      <button value="ok" class="btn primary" type="submit">Fertig</button>
     </menu>
   </form>
 </dialog>

@@ -1,6 +1,6 @@
 /* Bei jeder Änderung an den Dateien die Version erhöhen – die App zeigt dann „Neue Version verfügbar“. */
-const CACHE = 'einkaufszettel-v7';
-const ASSETS = ['./','./index.html','./styles.css','./icons.js','./app.js','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
+const CACHE = 'einkaufszettel-v9';
+const ASSETS = ['./','./index.html','./styles.css','./icons.js','./app.js','./sync.js','./firebase-config.js','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 
 self.addEventListener('install', e => {
   // cache: 'reload' umgeht den HTTP-Cache, damit wirklich die neuen Dateien gespeichert werden
@@ -13,7 +13,10 @@ self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipW
 
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  const url = new URL(req.url);
+  // Firebase-SDK (versionierte URLs) ebenfalls cachen, damit geteilte Listen offline starten
+  const sdk = url.origin === 'https://www.gstatic.com' && url.pathname.startsWith('/firebasejs/');
+  if (req.method !== 'GET' || (url.origin !== location.origin && !sdk)) return;
   e.respondWith(caches.match(req, { ignoreSearch: true }).then(hit => hit || fetch(req).then(res => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {}); }
     return res;

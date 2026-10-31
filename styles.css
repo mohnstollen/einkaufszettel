@@ -157,3 +157,16 @@ dialog label.check input{width:auto;margin:0}
 .order li{display:flex;align-items:center;gap:4px;padding:6px 0 6px 4px;border-bottom:1px solid var(--line)}
 .order li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .act:disabled{opacity:.25;cursor:default}
+.sync{border:0;background:none;padding:6px;line-height:0;font-size:18px;cursor:pointer;color:var(--muted);position:relative;flex:none}
+.sync::after{content:"";position:absolute;right:3px;bottom:3px;width:8px;height:8px;border-radius:50%;
+  border:2px solid var(--card);background:var(--muted)}
+.sync.live{color:var(--accent)}
+.sync.live::after{background:#16a34a}
+.sync.pending::after{background:var(--star)}
+.sync.offline::after{background:var(--danger)}
+.new-badge{background:var(--star);color:#fff;border-radius:999px;padding:0 8px;font-weight:600}
+.item.new .name b::after{content:"neu";margin-left:6px;padding:0 6px;border-radius:999px;background:var(--star);
+  color:#fff;font-size:11px;font-weight:600;vertical-align:2px}
+.share-actions{display:flex;gap:8px;margin-bottom:12px}
+.share-actions .btn{flex:1}
+dialog menu .danger{color:var(--danger);margin-right:auto}
