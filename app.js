@@ -39,13 +39,6 @@ function newList(name, template) {
 }
 function defaultDb() { return { lists: [newList('Lebensmittel', 'food')], since: Date.now(), lastBackup: 0, snoozeUntil: 0 }; }
 
-let db = load();
-let state = null; // gerade geöffnete Liste (null = Übersicht)
-let fromHome = false;
-let editing = null;
-let editingSection = null;
-let tripDialogMode = 'new';
-
 /* ---------- Laden / Migration / Prüfung ---------- */
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = v => typeof v === 'string' ? v : '';
@@ -113,6 +106,13 @@ function requestPersistence() {
   if (navigator.storage && navigator.storage.persist)
     navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
 }
+
+let db = load();
+let state = null; // gerade geöffnete Liste (null = Übersicht)
+let fromHome = false;
+let editing = null;
+let editingSection = null;
+let tripDialogMode = 'new';
 
 const $ = sel => document.querySelector(sel);
 const listEl = $('#list');
@@ -346,8 +346,26 @@ function render() {
 
   if (!listEl.children.length) listEl.innerHTML = '<div class="empty">' + (state.sections.length || q
     ? 'Nichts gefunden.' : 'Diese Liste ist noch leer. Tippe auf +, um ein Produkt hinzuzufügen.') + '</div>';
+  if (q) listEl.prepend(quickAddButton($('#search').value.trim()));
   $('#counter').textContent = doneTotal + ' / ' + needTotal;
   $('#btnOnlyNeeded').classList.toggle('on', state.onlyNeeded);
+}
+
+/* Suchtreffer ohne exakten Namen → anlegen; vorhanden, aber ausgeblendet → markieren */
+function quickAddButton(name) {
+  let found = null;
+  state.sections.forEach(s => s.products.forEach(p => { if (p.name.toLowerCase() === name.toLowerCase()) found = p; }));
+  if (found && (found.needed || !state.onlyNeeded)) return '';
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'quick-add'; b.id = 'quickAdd';
+  b.innerHTML = ICON.plus + '<span></span>';
+  b.querySelector('span').textContent = found ? '„' + found.name + '“ auf die Liste setzen' : '„' + name + '“ hinzufügen';
+  b.addEventListener('click', () => {
+    if (!found) return openProduct(null, null, name);
+    found.needed = true; found.done = false;
+    $('#search').value = ''; save(); render(); toast('Markiert');
+  });
+  return b;
 }
 
 /* ---------- Einkauf-Dialog ---------- */
@@ -596,37 +614,82 @@ function reuseTrip(trip) {
 }
 
 /* ---------- Produkt-Dialog ---------- */
-function openProduct(sec, product) {
+const lastSection = {}; // zuletzt gewählter Abschnitt je Liste (nur für diese Sitzung)
+
+function openProduct(sec, product, presetName) {
   editing = product ? { sectionId: sec.id, productId: product.id } : null;
   $('#dlgProductTitle').textContent = product ? 'Produkt bearbeiten' : 'Produkt hinzufügen';
   const sel = $('#pSection');
   sel.innerHTML = '';
-  state.sections.forEach(s => { const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o); });
-  if (!state.sections.length) { const o = document.createElement('option'); o.value = ''; o.textContent = 'Allgemein'; sel.appendChild(o); }
-  sel.value = sec ? sec.id : (state.sections[0] || { id: '' }).id;
-  $('#pName').value = product ? product.name : '';
+  // aktuelle Liste zuerst, danach die übrigen – so lassen sich Produkte auch in andere Listen legen
+  [state, ...db.lists.filter(l => l !== state)].forEach(list => {
+    const g = document.createElement('optgroup');
+    g.label = list === state ? list.name + ' (diese Liste)' : list.name;
+    const opts = list.sections.length ? list.sections : [{ id: '', name: 'Allgemein' }];
+    opts.forEach(s => {
+      const o = document.createElement('option'); o.value = list.id + '|' + s.id;
+      o.textContent = list === state ? s.name : list.name + ' › ' + s.name;
+      g.appendChild(o);
+    });
+    sel.appendChild(g);
+  });
+  const remembered = state.sections.find(s => s.id === lastSection[state.id]);
+  const def = sec || remembered || state.sections[0];
+  sel.value = state.id + '|' + (def ? def.id : '');
+  $('#pName').value = product ? product.name : (presetName || '');
   $('#pNote').value = product ? (product.note || '') : '';
+  $('#pCopy').checked = false;
+  toggleCopy();
   $('#dlgProduct').showModal();
   setTimeout(() => $('#pName').focus(), 50);
 }
+function targetList() { return db.lists.find(l => l.id === $('#pSection').value.split('|')[0]) || state; }
+function toggleCopy() { $('#pCopyWrap').classList.toggle('hidden', !editing || targetList() === state); }
+$('#pSection').addEventListener('change', toggleCopy);
+
+/* Legt ein Produkt im Abschnitt an oder markiert ein gleichnamiges; true = neu angelegt */
+function addProductTo(sec, name, note, needed) {
+  const dupe = sec.products.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (dupe) {
+    if (needed) { dupe.needed = true; dupe.done = false; }
+    dupe.note = note || dupe.note;
+    return false;
+  }
+  sec.products.push({ id: uid(), name, note, needed, done: false });
+  return true;
+}
+
 $('#formProduct').addEventListener('submit', e => {
   if (!(e.submitter && e.submitter.value === 'ok')) { editing = null; return; }
   const name = $('#pName').value.trim();
   if (!name) { e.preventDefault(); return; }
   const note = $('#pNote').value.trim();
-  let target = state.sections.find(s => s.id === $('#pSection').value);
-  if (!target) { target = { id: uid(), name: 'Allgemein', collapsed: false, products: [] }; state.sections.push(target); }
+  const list = targetList();
+  const secId = $('#pSection').value.split('|')[1];
+  let target = list.sections.find(s => s.id === secId);
+  if (!target) { target = { id: uid(), name: 'Allgemein', collapsed: false, products: [] }; list.sections.push(target); }
+  const where = list === state ? '' : ' in „' + list.name + '“';
+
   if (editing) {
     const src = state.sections.find(s => s.id === editing.sectionId);
     const p = src.products.find(x => x.id === editing.productId);
-    p.name = name; p.note = note;
-    if (src.id !== target.id) { src.products = src.products.filter(x => x.id !== p.id); target.products.push(p); }
-    toast('Gespeichert');
+    if (list === state) {
+      p.name = name; p.note = note;
+      if (src.id !== target.id) { src.products = src.products.filter(x => x.id !== p.id); target.products.push(p); }
+      toast('Gespeichert');
+    } else {
+      const keep = $('#pCopy').checked;
+      if (keep) { p.name = name; p.note = note; }
+      else src.products = src.products.filter(x => x.id !== p.id);
+      addProductTo(target, name, note, p.needed);
+      toast((keep ? 'Kopiert' : 'Verschoben') + where);
+    }
   } else {
-    const dupe = target.products.find(p => p.name.toLowerCase() === name.toLowerCase());
-    if (dupe) { dupe.needed = true; dupe.done = false; dupe.note = note || dupe.note; toast('Bereits vorhanden – markiert'); }
-    else { target.products.push({ id: uid(), name, note, needed: true, done: false }); toast('Hinzugefügt und markiert'); }
+    const isNew = addProductTo(target, name, note, true);
+    toast((isNew ? 'Hinzugefügt und markiert' : 'Bereits vorhanden – markiert') + where);
+    $('#search').value = '';
   }
+  lastSection[list.id] = target.id;
   editing = null; save(); render();
 });
 
@@ -652,6 +715,30 @@ $('#formSection').addEventListener('submit', e => {
   editingSection = null; save(); render();
 });
 
+/* ---------- Reihenfolge ändern (Abschnitte / Listen) ---------- */
+function openOrder(title, getItems) {
+  $('#dlgOrderTitle').textContent = title;
+  const draw = () => {
+    const items = getItems();
+    const ul = $('#orderList');
+    ul.innerHTML = '';
+    items.forEach((item, i) => {
+      const li = document.createElement('li');
+      const n = document.createElement('span'); n.textContent = item.name;
+      const up = iconBtn('act', 'up', 'Nach oben');
+      const down = iconBtn('act', 'down', 'Nach unten');
+      up.disabled = i === 0; down.disabled = i === items.length - 1;
+      const move = d => { items.splice(i + d, 0, items.splice(i, 1)[0]); save(); draw(); refresh(); };
+      up.addEventListener('click', () => move(-1));
+      down.addEventListener('click', () => move(1));
+      li.append(n, up, down);
+      ul.appendChild(li);
+    });
+  };
+  draw();
+  $('#dlgOrder').showModal();
+}
+
 /* ---------- Menü & Aktionen ---------- */
 function closeMenus() { $('#menu').classList.add('hidden'); $('#homeMenu').classList.add('hidden'); }
 $('#btnMenu').addEventListener('click', e => { e.stopPropagation(); $('#menu').classList.toggle('hidden'); });
@@ -660,9 +747,10 @@ document.addEventListener('click', closeMenus);
 $('#menu').addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
   closeMenus();
-  ({ addProduct: () => openProduct(state.sections[0], null),
+  ({ addProduct: () => openProduct(null, null),
      addSection: () => openSection(null),
      renameList: () => openListDialog(state),
+     orderSections: () => openOrder('Abschnitte sortieren', () => state.sections),
      archive: () => { archiveTab = 'list'; openArchive(); },
      stats: () => { archiveTab = 'stats'; openArchive(); },
      clearMarks, export: exportText })[btn.dataset.act]();
@@ -670,11 +758,13 @@ $('#menu').addEventListener('click', e => {
 $('#homeMenu').addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
   closeMenus();
-  ({ newList: () => openListDialog(null), backup: backupJSON,
+  ({ newList: () => openListDialog(null), orderLists: () => openOrder('Listen sortieren', () => db.lists),
+     backup: backupJSON,
      restore: () => $('#fileInput').click() })[btn.dataset.act]();
 });
-$('#fab').addEventListener('click', () => state ? openProduct(state.sections[0], null) : openListDialog(null));
+$('#fab').addEventListener('click', () => state ? openProduct(null, null) : openListDialog(null));
 $('#search').addEventListener('input', render);
+$('#search').addEventListener('keydown', e => { if (e.key === 'Enter' && $('#quickAdd')) { e.preventDefault(); $('#quickAdd').click(); } });
 $('#btnOnlyNeeded').addEventListener('click', () => { state.onlyNeeded = !state.onlyNeeded; save(); render(); });
 
 function clearMarks() {

@@ -1,5 +1,5 @@
 /* Bei jeder Änderung an den Dateien die Version erhöhen – die App zeigt dann „Neue Version verfügbar“. */
-const CACHE = 'einkaufszettel-v6';
+const CACHE = 'einkaufszettel-v7';
 const ASSETS = ['./','./index.html','./styles.css','./icons.js','./app.js','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 
 self.addEventListener('install', e => {

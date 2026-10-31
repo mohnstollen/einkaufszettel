@@ -20,6 +20,7 @@
     <button id="btnHomeMenu" class="btn ghost icon-only" title="Menü" aria-label="Menü"><span data-icon="more"></span></button>
     <div class="menu hidden" id="homeMenu">
       <button data-act="newList"><span data-icon="plus"></span>Neue Liste</button>
+      <button data-act="orderLists"><span data-icon="sort"></span>Listen sortieren</button>
       <hr>
       <button data-act="backup">Backup (JSON) speichern</button>
       <button data-act="restore">Backup einlesen</button>
@@ -45,6 +46,7 @@
     <div class="menu hidden" id="menu">
       <button data-act="addProduct"><span data-icon="plus"></span>Produkt hinzufügen</button>
       <button data-act="addSection"><span data-icon="plus"></span>Abschnitt hinzufügen</button>
+      <button data-act="orderSections"><span data-icon="sort"></span>Abschnitte sortieren</button>
       <button data-act="renameList"><span data-icon="edit"></span>Liste umbenennen</button>
       <button data-act="archive"><span data-icon="archive"></span>Archiv</button>
       <button data-act="stats"><span data-icon="chart"></span>Statistik</button>
@@ -108,6 +110,7 @@
     <label>Abschnitt
       <select id="pSection"></select>
     </label>
+    <label id="pCopyWrap" class="check hidden"><input type="checkbox" id="pCopy"> Auch in dieser Liste behalten (kopieren)</label>
     <label>Notiz / Menge (optional)
       <input type="text" id="pNote" autocomplete="off" placeholder="z. B. 2 Packungen">
     </label>
@@ -127,6 +130,16 @@
     <menu>
       <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
       <button value="ok" class="btn primary" type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgOrder">
+  <form method="dialog">
+    <h2 id="dlgOrderTitle">Sortieren</h2>
+    <ul id="orderList" class="order"></ul>
+    <menu>
+      <button value="ok" class="btn primary" type="submit">Fertig</button>
     </menu>
   </form>
 </dialog>
