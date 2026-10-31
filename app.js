@@ -34,10 +34,10 @@ function newList(name, template) {
       id: uid(), name: sec, collapsed: false,
       products: products.map(n => ({ id: uid(), name: n, needed: false, done: false, note: '' }))
     })),
-    trip: null, lastStore: '', onlyNeeded: false, archive: []
+    trip: null, lastStore: '', onlyNeeded: false, archive: [], shared: null, seenAt: 0
   };
 }
-function defaultDb() { return { lists: [newList('Lebensmittel', 'food')], since: Date.now(), lastBackup: 0, snoozeUntil: 0 }; }
+function defaultDb() { return { lists: [newList('Lebensmittel', 'food')], since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '' }; }
 
 /* ---------- Laden / Migration / Prüfung ---------- */
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -53,7 +53,8 @@ function migrate(s) {
     collapsed: !!sec.collapsed,
     products: arr(sec.products).filter(p => isObj(p) && str(p.name).trim()).map(p => {
       const needed = p.needed === undefined ? !!p.checked : !!p.needed;
-      return { id: str(p.id) || uid(), name: p.name.trim(), note: str(p.note), needed, done: needed && !!p.done };
+      return { id: str(p.id) || uid(), name: p.name.trim(), note: str(p.note), needed, done: needed && !!p.done,
+        by: str(p.by), at: num(p.at) };
     })
   }));
   const archive = arr(s.archive).filter(t => isObj(t) && Array.isArray(t.entries)).map(t => ({
@@ -71,7 +72,9 @@ function migrate(s) {
     id: str(s.id) || uid(), name: str(s.name).trim() || 'Lebensmittel',
     sections, trip, lastStore: str(s.lastStore),
     onlyNeeded: s.onlyNeeded === undefined ? !!s.onlyChecked : !!s.onlyNeeded,
-    archive
+    archive,
+    shared: isObj(s.shared) && str(s.shared.id) ? { id: s.shared.id } : null,
+    seenAt: num(s.seenAt)
   };
 }
 /* Aktuelles Format { lists: [...] } oder alte Einzelliste { sections: [...] } */
@@ -83,7 +86,8 @@ function toDb(s) {
   else return null;
   const seen = new Set();
   lists.forEach(l => { if (seen.has(l.id)) l.id = uid(); seen.add(l.id); });
-  return { lists, since: num(s.since) || Date.now(), lastBackup: num(s.lastBackup), snoozeUntil: num(s.snoozeUntil) };
+  return { lists, since: num(s.since) || Date.now(), lastBackup: num(s.lastBackup), snoozeUntil: num(s.snoozeUntil),
+    userName: str(s.userName) };
 }
 function load() {
   try {
@@ -94,6 +98,7 @@ function load() {
 }
 let saveWarned = false;
 function save() {
+  if (sync) db.lists.forEach(l => { if (l.shared) sync.push(l); });
   try { localStorage.setItem(KEY, JSON.stringify(db)); saveWarned = false; }
   catch {
     if (saveWarned) return;
@@ -111,7 +116,7 @@ let db = load();
 let state = null; // gerade geöffnete Liste (null = Übersicht)
 let fromHome = false;
 let editing = null;
-let editingSection = null;
+let editingSection = null; // ID des Abschnitts
 let tripDialogMode = 'new';
 
 const $ = sel => document.querySelector(sel);
@@ -136,7 +141,9 @@ function iconBtn(cls, icon, title) {
 function refresh() { if (state) render(); else renderHome(); }
 
 function route() {
+  const invite = location.hash.match(/^#\/teilen\/([a-z0-9]{20,})$/);
   const m = location.hash.match(/^#\/liste\/(.+)$/);
+  if (state && state.shared) { state.seenAt = Date.now(); save(); }
   state = m ? db.lists.find(l => l.id === m[1]) || null : null;
   if (!state) fromHome = false;
   $('#viewHome').classList.toggle('hidden', !!state);
@@ -150,6 +157,7 @@ function route() {
   if (!state) document.title = 'Einkaufszettel';
   refresh();
   window.scrollTo(0, 0);
+  if (invite) joinShared(invite[1]);
 }
 window.addEventListener('hashchange', route);
 function openList(id) { fromHome = true; location.hash = '#/liste/' + id; }
@@ -198,6 +206,12 @@ function renderHome() {
       const st = document.createElement('span'); st.className = 'tb-item';
       st.innerHTML = ICON.store; st.append(store); sub.appendChild(st);
     }
+    if (list.shared) {
+      const sh = document.createElement('span'); sh.className = 'tb-item';
+      sh.innerHTML = ICON.share; sh.append('Geteilt'); sub.appendChild(sh);
+      const fresh = newCount(list);
+      if (fresh) { const nw = document.createElement('span'); nw.className = 'new-badge'; nw.textContent = fresh + ' neu'; sub.appendChild(nw); }
+    }
     const info = document.createElement('span');
     info.textContent = products ? products + (products === 1 ? ' Produkt' : ' Produkte') : 'Leer';
     sub.appendChild(info);
@@ -239,7 +253,11 @@ $('#formList').addEventListener('submit', e => {
 });
 function delList(list) {
   const n = list.archive.length;
-  if (!confirm('Liste „' + list.name + '“' + (n ? ' samt ' + n + ' archivierten Einkäufen' : '') + ' löschen?')) return;
+  const msg = list.shared
+    ? 'Geteilte Liste „' + list.name + '“ von diesem Gerät entfernen? Für die anderen bleibt sie erhalten.'
+    : 'Liste „' + list.name + '“' + (n ? ' samt ' + n + ' archivierten Einkäufen' : '') + ' löschen?';
+  if (!confirm(msg)) return;
+  if (list.shared && sync) sync.unwatch(list);
   db.lists = db.lists.filter(l => l.id !== list.id);
   save(); renderHome(); toast('Liste gelöscht');
 }
@@ -265,6 +283,7 @@ function renderTripBar() {
 
 function render() {
   $('#listTitle').textContent = state.name;
+  renderSyncState();
   document.title = state.name + ' – Einkaufszettel';
   renderTripBar();
   const q = $('#search').value.trim().toLowerCase();
@@ -312,7 +331,7 @@ function render() {
     }
     items.forEach(p => {
       const li = document.createElement('li');
-      li.className = 'item' + (p.needed ? ' needed' : '') + (p.needed && p.done ? ' done' : '');
+      li.className = 'item' + (p.needed ? ' needed' : '') + (p.needed && p.done ? ' done' : '') + (isNew(state, p) ? ' new' : '');
 
       const star = iconBtn('mark' + (p.needed ? ' on' : ''), p.needed ? 'starOn' : 'star',
         p.needed ? 'Vom Einkauf entfernen' : 'Zum Einkauf hinzufügen');
@@ -326,7 +345,8 @@ function render() {
       nameWrap.className = 'name';
       const b = document.createElement('b'); b.textContent = p.name;
       nameWrap.appendChild(b);
-      if (p.note) { const n = document.createElement('div'); n.className = 'note'; n.textContent = p.note; nameWrap.appendChild(n); }
+      const meta = [p.note, state.shared && p.by && p.by !== db.userName ? 'von ' + p.by : ''].filter(Boolean).join(' · ');
+      if (meta) { const n = document.createElement('div'); n.className = 'note'; n.textContent = meta; nameWrap.appendChild(n); }
       nameWrap.addEventListener('click', () => { if (!p.needed) p.needed = true; else p.done = !p.done; save(); render(); });
 
       const edit = iconBtn('act', 'edit', 'Bearbeiten');
@@ -604,7 +624,7 @@ function reuseTrip(trip) {
     e.items.forEach(i => {
       const p = sec.products.find(x => x.name.toLowerCase() === i.name.toLowerCase());
       if (p) { p.needed = true; p.done = false; }
-      else { sec.products.push({ id: uid(), name: i.name, note: i.note, needed: true, done: false }); created++; }
+      else { sec.products.push({ id: uid(), name: i.name, note: i.note, needed: true, done: false, by: db.userName, at: Date.now() }); created++; }
     });
   });
   state.trip = null;
@@ -655,7 +675,7 @@ function addProductTo(sec, name, note, needed) {
     dupe.note = note || dupe.note;
     return false;
   }
-  sec.products.push({ id: uid(), name, note, needed, done: false });
+  sec.products.push({ id: uid(), name, note, needed, done: false, by: db.userName, at: Date.now() });
   return true;
 }
 
@@ -695,7 +715,7 @@ $('#formProduct').addEventListener('submit', e => {
 
 /* ---------- Abschnitt-Dialog ---------- */
 function openSection(sec) {
-  editingSection = sec || null;
+  editingSection = sec ? sec.id : null;
   $('#dlgSectionTitle').textContent = sec ? 'Abschnitt umbenennen' : 'Abschnitt hinzufügen';
   $('#sName').value = sec ? sec.name : '';
   $('#dlgSection').showModal();
@@ -710,7 +730,8 @@ $('#formSection').addEventListener('submit', e => {
   if (!(e.submitter && e.submitter.value === 'ok')) { editingSection = null; return; }
   const name = $('#sName').value.trim();
   if (!name) { e.preventDefault(); return; }
-  if (editingSection) editingSection.name = name;
+  const sec = editingSection && state.sections.find(x => x.id === editingSection);
+  if (sec) sec.name = name;
   else state.sections.push({ id: uid(), name, collapsed: false, products: [] });
   editingSection = null; save(); render();
 });
@@ -750,6 +771,7 @@ $('#menu').addEventListener('click', e => {
   ({ addProduct: () => openProduct(null, null),
      addSection: () => openSection(null),
      renameList: () => openListDialog(state),
+     share: () => shareList(state),
      orderSections: () => openOrder('Abschnitte sortieren', () => state.sections),
      archive: () => { archiveTab = 'list'; openArchive(); },
      stats: () => { archiveTab = 'stats'; openArchive(); },
@@ -759,7 +781,7 @@ $('#homeMenu').addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
   closeMenus();
   ({ newList: () => openListDialog(null), orderLists: () => openOrder('Listen sortieren', () => db.lists),
-     backup: backupJSON,
+     backup: backupJSON, name: () => askName(true),
      restore: () => $('#fileInput').click() })[btn.dataset.act]();
 });
 $('#fab').addEventListener('click', () => state ? openProduct(null, null) : openListDialog(null));
@@ -804,8 +826,10 @@ $('#fileInput').addEventListener('change', async e => {
     if (!data) throw new Error('Format');
     if (Array.isArray(s.lists)) {
       if (confirm('Alle Listen durch das Backup ersetzen (' + data.lists.length + ' Listen)?')) {
-        db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil };
+        if (sync) db.lists.forEach(l => sync.unwatch(l));
+        db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil, userName: db.userName };
         save(); renderHome(); toast('Backup geladen');
+        if (db.lists.some(l => l.shared)) loadSync().then(m => m && db.lists.forEach(l => l.shared && m.watch(l)));
       }
     } else {
       // Backup aus der Zeit vor mehreren Listen: als zusätzliche Liste übernehmen
@@ -816,6 +840,103 @@ $('#fileInput').addEventListener('change', async e => {
   } catch { alert('Datei konnte nicht gelesen werden.'); }
   e.target.value = '';
 });
+
+/* ---------- Geteilte Listen (Firebase, siehe sync.js) ---------- */
+let sync = null, syncLoading = null;
+
+function loadSync() {
+  if (!syncLoading) syncLoading = import('./sync.js').then(async m => {
+    if (!m.configured()) throw new Error('nicht eingerichtet');
+    await m.init({
+      onChange: list => { save(); if (state === list || !state) refresh(); },
+      onError: e => { console.error(e); toast('Synchronisierung fehlgeschlagen: ' + (e.code || e.message)); },
+      onMissing: list => { toast('Die geteilte Liste „' + list.name + '“ existiert nicht (mehr).'); }
+    });
+    sync = m;
+    db.lists.forEach(l => { if (l.shared) m.watch(l); });
+    return m;
+  }).catch(e => {
+    syncLoading = null;
+    toast(e.message === 'nicht eingerichtet' ? 'Teilen ist noch nicht eingerichtet (Firebase, siehe README).' : 'Keine Verbindung zum Teilen-Dienst.');
+    console.error(e);
+    return null;
+  });
+  return syncLoading;
+}
+
+/* Name einmalig abfragen – wird bei geteilten Listen neben eigenen Produkten angezeigt */
+let nameResolve = null;
+function askName(force) {
+  if (db.userName && !force) return Promise.resolve(db.userName);
+  $('#uName').value = db.userName;
+  $('#dlgName').showModal();
+  setTimeout(() => $('#uName').focus(), 50);
+  return new Promise(res => { nameResolve = res; });
+}
+$('#formName').addEventListener('submit', e => {
+  const ok = e.submitter && e.submitter.value === 'ok';
+  const name = $('#uName').value.trim();
+  if (ok && !name) { e.preventDefault(); return; }
+  if (ok) { db.userName = name; save(); refresh(); }
+  if (nameResolve) nameResolve(ok ? name : null);
+  nameResolve = null;
+});
+
+async function shareList(list) {
+  if (!list.shared) {
+    if (!await askName()) return;
+    const m = await loadSync(); if (!m) return;
+    list.shared = { id: m.newSharedId() };
+    list.seenAt = Date.now();
+    m.watch(list, true);
+    save(); refresh();
+  }
+  const link = location.origin + location.pathname + '#/teilen/' + list.shared.id;
+  $('#shareLink').value = link;
+  $('#btnShareSend').classList.toggle('hidden', !navigator.share);
+  $('#btnShareSend').onclick = () => navigator.share({ title: list.name, text: 'Unser Einkaufszettel „' + list.name + '“', url: link }).catch(() => {});
+  $('#btnShareCopy').onclick = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => toast('Link kopiert'));
+    else { $('#shareLink').select(); document.execCommand('copy'); toast('Link kopiert'); }
+  };
+  $('#btnShareStop').onclick = () => {
+    if (!confirm('Teilen auf diesem Gerät beenden? Die Liste bleibt hier als private Kopie erhalten.')) return;
+    if (sync) sync.unwatch(list);
+    list.shared = null; save(); refresh();
+    $('#dlgShare').close(); toast('Teilen beendet');
+  };
+  $('#dlgShare').showModal();
+}
+
+async function joinShared(sid) {
+  const known = db.lists.find(l => l.shared && l.shared.id === sid);
+  if (known) return location.replace('#/liste/' + known.id);
+  if (!await askName()) return location.replace('#');
+  const m = await loadSync();
+  if (!m) return location.replace('#');
+  const list = newList('Geteilte Liste', 'empty');
+  list.shared = { id: sid };
+  list.seenAt = 0;
+  db.lists.push(list);
+  m.watch(list);
+  save();
+  location.replace('#/liste/' + list.id);
+  toast('Geteilte Liste hinzugefügt');
+}
+
+const isNew = (list, p) => !!list.shared && p.at > list.seenAt && !!p.by && p.by !== db.userName;
+function newCount(list) { return list.sections.reduce((n, s) => n + s.products.filter(p => isNew(list, p)).length, 0); }
+
+function renderSyncState() {
+  const el = $('#syncState');
+  el.classList.toggle('hidden', !state.shared);
+  if (!state.shared) return;
+  const st = sync ? sync.status(state) : (navigator.onLine ? 'connecting' : 'offline');
+  const text = { live: 'Geteilt – aktuell', pending: 'Geteilt – Änderungen werden gesendet', offline: 'Geteilt – offline, Änderungen werden später gesendet', connecting: 'Geteilt – verbinde…' }[st];
+  el.className = 'sync ' + st;
+  el.title = text; el.setAttribute('aria-label', text);
+}
+$('#syncState').addEventListener('click', () => shareList(state));
 
 /* ---------- App-Update ---------- */
 function showUpdate(worker) {
@@ -835,3 +956,6 @@ function toast(msg) {
 applyIcons();
 route();
 requestPersistence();
+if (db.lists.some(l => l.shared)) loadSync();
+window.addEventListener('online', () => state && renderSyncState());
+window.addEventListener('offline', () => state && renderSyncState());
