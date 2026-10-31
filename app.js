@@ -335,7 +335,7 @@ function render() {
 
       const star = iconBtn('mark' + (p.needed ? ' on' : ''), p.needed ? 'starOn' : 'star',
         p.needed ? 'Vom Einkauf entfernen' : 'Zum Einkauf hinzufügen');
-      star.addEventListener('click', () => { p.needed = !p.needed; if (!p.needed) p.done = false; save(); render(); });
+      star.addEventListener('click', () => { if (p.needed) { p.needed = false; p.done = false; } else markNeeded(p); save(); render(); });
 
       const cart = iconBtn('cart' + (p.done ? ' on' : ''), p.done ? 'boxOn' : 'box', 'Im Einkaufswagen');
       cart.disabled = !p.needed;
@@ -345,9 +345,9 @@ function render() {
       nameWrap.className = 'name';
       const b = document.createElement('b'); b.textContent = p.name;
       nameWrap.appendChild(b);
-      const meta = [p.note, state.shared && p.by && p.by !== db.userName ? 'von ' + p.by : ''].filter(Boolean).join(' · ');
+      const meta = [p.note, state.shared && p.needed && p.by && p.by !== db.userName ? 'von ' + p.by : ''].filter(Boolean).join(' · ');
       if (meta) { const n = document.createElement('div'); n.className = 'note'; n.textContent = meta; nameWrap.appendChild(n); }
-      nameWrap.addEventListener('click', () => { if (!p.needed) p.needed = true; else p.done = !p.done; save(); render(); });
+      nameWrap.addEventListener('click', () => { if (!p.needed) markNeeded(p); else p.done = !p.done; save(); render(); });
 
       const edit = iconBtn('act', 'edit', 'Bearbeiten');
       edit.addEventListener('click', () => openProduct(sec, p));
@@ -382,7 +382,7 @@ function quickAddButton(name) {
   b.querySelector('span').textContent = found ? '„' + found.name + '“ auf die Liste setzen' : '„' + name + '“ hinzufügen';
   b.addEventListener('click', () => {
     if (!found) return openProduct(null, null, name);
-    found.needed = true; found.done = false;
+    markNeeded(found);
     $('#search').value = ''; save(); render(); toast('Markiert');
   });
   return b;
@@ -623,7 +623,7 @@ function reuseTrip(trip) {
     if (!sec) { sec = { id: uid(), name: e.section, collapsed: false, products: [] }; state.sections.push(sec); }
     e.items.forEach(i => {
       const p = sec.products.find(x => x.name.toLowerCase() === i.name.toLowerCase());
-      if (p) { p.needed = true; p.done = false; }
+      if (p) markNeeded(p);
       else { sec.products.push({ id: uid(), name: i.name, note: i.note, needed: true, done: false, by: db.userName, at: Date.now() }); created++; }
     });
   });
@@ -667,11 +667,14 @@ function targetList() { return db.lists.find(l => l.id === $('#pSection').value.
 function toggleCopy() { $('#pCopyWrap').classList.toggle('hidden', !editing || targetList() === state); }
 $('#pSection').addEventListener('change', toggleCopy);
 
+/* Auf den Einkaufszettel setzen – merkt sich, wer und wann (für „von …“ und „neu“ in geteilten Listen) */
+function markNeeded(p) { p.needed = true; p.done = false; p.by = db.userName; p.at = Date.now(); }
+
 /* Legt ein Produkt im Abschnitt an oder markiert ein gleichnamiges; true = neu angelegt */
 function addProductTo(sec, name, note, needed) {
   const dupe = sec.products.find(p => p.name.toLowerCase() === name.toLowerCase());
   if (dupe) {
-    if (needed) { dupe.needed = true; dupe.done = false; }
+    if (needed) markNeeded(dupe);
     dupe.note = note || dupe.note;
     return false;
   }
@@ -924,7 +927,7 @@ async function joinShared(sid) {
   toast('Geteilte Liste hinzugefügt');
 }
 
-const isNew = (list, p) => !!list.shared && p.at > list.seenAt && !!p.by && p.by !== db.userName;
+const isNew = (list, p) => !!list.shared && p.needed && p.at > list.seenAt && !!p.by && p.by !== db.userName;
 function newCount(list) { return list.sections.reduce((n, s) => n + s.products.filter(p => isNew(list, p)).length, 0); }
 
 function renderSyncState() {
