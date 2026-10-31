@@ -37,7 +37,7 @@ function newList(name, template) {
     trip: null, lastStore: '', onlyNeeded: false, archive: []
   };
 }
-function defaultDb() { return { lists: [newList('Lebensmittel', 'food')] }; }
+function defaultDb() { return { lists: [newList('Lebensmittel', 'food')], since: Date.now(), lastBackup: 0, snoozeUntil: 0 }; }
 
 let db = load();
 let state = null; // gerade geöffnete Liste (null = Übersicht)
@@ -46,32 +46,51 @@ let editing = null;
 let editingSection = null;
 let tripDialogMode = 'new';
 
-/* ---------- Laden / Migration ---------- */
+/* ---------- Laden / Migration / Prüfung ---------- */
+const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+const str = v => typeof v === 'string' ? v : '';
+const num = v => typeof v === 'number' && isFinite(v) ? v : 0;
+const arr = v => Array.isArray(v) ? v : [];
+
+/* Bringt eine Liste (auch aus alten Versionen oder fremden Dateien) in eine sichere Form */
 function migrate(s) {
-  s.sections.forEach(sec => sec.products.forEach(p => {
-    if (p.needed === undefined) p.needed = !!p.checked;
-    if (p.done === undefined) p.done = false;
-    delete p.checked;
+  const sections = arr(s.sections).filter(isObj).map(sec => ({
+    id: str(sec.id) || uid(),
+    name: str(sec.name).trim() || 'Allgemein',
+    collapsed: !!sec.collapsed,
+    products: arr(sec.products).filter(p => isObj(p) && str(p.name).trim()).map(p => {
+      const needed = p.needed === undefined ? !!p.checked : !!p.needed;
+      return { id: str(p.id) || uid(), name: p.name.trim(), note: str(p.note), needed, done: needed && !!p.done };
+    })
   }));
-  if (s.onlyNeeded === undefined) s.onlyNeeded = !!s.onlyChecked;
-  delete s.onlyChecked;
-  if (!Array.isArray(s.archive)) s.archive = [];
-  s.archive.forEach(t => {
-    if (!t.archivedAt) t.archivedAt = t.date;
-    if (!t.tripDate) t.tripDate = (t.date || '').slice(0, 10);
-    if (!t.store) t.store = 'Unbekannt';
-  });
-  if (s.trip === undefined) s.trip = null;
-  if (s.lastStore === undefined) s.lastStore = '';
-  if (!s.id) s.id = uid();
-  if (!s.name) s.name = 'Lebensmittel';
-  return s;
+  const archive = arr(s.archive).filter(t => isObj(t) && Array.isArray(t.entries)).map(t => ({
+    id: str(t.id) || uid(),
+    store: str(t.store) || 'Unbekannt',
+    tripDate: str(t.tripDate) || str(t.date).slice(0, 10),
+    archivedAt: str(t.archivedAt) || str(t.date),
+    entries: t.entries.filter(e => isObj(e) && Array.isArray(e.items)).map(e => ({
+      section: str(e.section),
+      items: e.items.filter(i => isObj(i) && str(i.name)).map(i => ({ name: i.name, note: str(i.note), done: !!i.done }))
+    }))
+  }));
+  const trip = isObj(s.trip) && str(s.trip.store) && str(s.trip.date) ? { date: s.trip.date, store: s.trip.store } : null;
+  return {
+    id: str(s.id) || uid(), name: str(s.name).trim() || 'Lebensmittel',
+    sections, trip, lastStore: str(s.lastStore),
+    onlyNeeded: s.onlyNeeded === undefined ? !!s.onlyChecked : !!s.onlyNeeded,
+    archive
+  };
 }
 /* Aktuelles Format { lists: [...] } oder alte Einzelliste { sections: [...] } */
 function toDb(s) {
-  if (s && Array.isArray(s.lists)) return { lists: s.lists.filter(l => l && Array.isArray(l.sections)).map(migrate) };
-  if (s && Array.isArray(s.sections)) return { lists: [migrate(s)] };
-  return null;
+  if (!isObj(s)) return null;
+  let lists;
+  if (Array.isArray(s.lists)) lists = s.lists.filter(l => isObj(l) && Array.isArray(l.sections)).map(migrate);
+  else if (Array.isArray(s.sections)) lists = [migrate(s)];
+  else return null;
+  const seen = new Set();
+  lists.forEach(l => { if (seen.has(l.id)) l.id = uid(); seen.add(l.id); });
+  return { lists, since: num(s.since) || Date.now(), lastBackup: num(s.lastBackup), snoozeUntil: num(s.snoozeUntil) };
 }
 function load() {
   try {
@@ -80,7 +99,20 @@ function load() {
     return (raw && toDb(JSON.parse(raw))) || defaultDb();
   } catch { return defaultDb(); }
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} }
+let saveWarned = false;
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(db)); saveWarned = false; }
+  catch {
+    if (saveWarned) return;
+    saveWarned = true;
+    alert('Speichern fehlgeschlagen – der Speicher des Browsers ist evtl. voll. Bitte erstelle über das Menü der Startseite ein Backup.');
+  }
+}
+/* Bittet den Browser, die Daten nicht automatisch zu löschen (v. a. Safari/iOS) */
+function requestPersistence() {
+  if (navigator.storage && navigator.storage.persist)
+    navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
+}
 
 const $ = sel => document.querySelector(sel);
 const listEl = $('#list');
@@ -123,10 +155,31 @@ window.addEventListener('hashchange', route);
 function openList(id) { fromHome = true; location.hash = '#/liste/' + id; }
 $('#btnBack').addEventListener('click', () => { if (fromHome) history.back(); else location.hash = ''; });
 
+const BACKUP_DAYS = 30;
+function backupDue() {
+  const hasData = db.lists.some(l => l.archive.length || l.sections.some(s => s.products.length));
+  const now = Date.now();
+  return hasData && now > db.snoozeUntil && now - Math.max(db.lastBackup, db.since) > BACKUP_DAYS * 864e5;
+}
+function renderBackupNotice(box) {
+  const n = document.createElement('div');
+  n.className = 'notice';
+  n.innerHTML = '<span></span><div class="notice-actions"><button type="button" class="btn ghost">Später</button>' +
+    '<button type="button" class="btn primary">Jetzt sichern</button></div>';
+  n.querySelector('span').textContent = db.lastBackup
+    ? 'Dein letztes Backup ist ' + Math.floor((Date.now() - db.lastBackup) / 864e5) + ' Tage alt.'
+    : 'Du hast noch kein Backup erstellt. Die Listen liegen nur in diesem Browser.';
+  const [later, now] = n.querySelectorAll('button');
+  later.addEventListener('click', () => { db.snoozeUntil = Date.now() + 7 * 864e5; save(); renderHome(); });
+  now.addEventListener('click', backupJSON);
+  box.appendChild(n);
+}
+
 function renderHome() {
   const box = $('#home');
   box.innerHTML = '';
-  if (!db.lists.length) { box.innerHTML = '<div class="empty">Noch keine Listen. Tippe auf +, um eine anzulegen.</div>'; return; }
+  if (backupDue()) renderBackupNotice(box);
+  if (!db.lists.length) { box.insertAdjacentHTML('beforeend', '<div class="empty">Noch keine Listen. Tippe auf +, um eine anzulegen.</div>'); return; }
   const wrap = document.createElement('div');
   wrap.className = 'lists';
   db.lists.forEach(list => {
@@ -650,7 +703,8 @@ function backupJSON() {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'einkaufszettel-' + todayISO() + '.json';
-  a.click(); URL.revokeObjectURL(a.href);
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  db.lastBackup = Date.now(); save(); refresh();
 }
 $('#fileInput').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -660,7 +714,8 @@ $('#fileInput').addEventListener('change', async e => {
     if (!data) throw new Error('Format');
     if (Array.isArray(s.lists)) {
       if (confirm('Alle Listen durch das Backup ersetzen (' + data.lists.length + ' Listen)?')) {
-        db = data; save(); renderHome(); toast('Backup geladen');
+        db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil };
+        save(); renderHome(); toast('Backup geladen');
       }
     } else {
       // Backup aus der Zeit vor mehreren Listen: als zusätzliche Liste übernehmen
@@ -672,6 +727,15 @@ $('#fileInput').addEventListener('change', async e => {
   e.target.value = '';
 });
 
+/* ---------- App-Update ---------- */
+function showUpdate(worker) {
+  $('#updateBar').classList.remove('hidden');
+  $('#btnUpdate').onclick = () => {
+    navigator.serviceWorker.addEventListener('controllerchange', () => location.reload());
+    worker.postMessage('skipWaiting');
+  };
+}
+
 let toastTimer;
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
@@ -680,3 +744,4 @@ function toast(msg) {
 
 applyIcons();
 route();
+requestPersistence();

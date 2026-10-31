@@ -76,6 +76,10 @@ main{padding:12px;max-width:760px;margin:0 auto}
 .item.done .note{text-decoration:line-through}
 .empty{padding:14px;color:var(--muted);font-size:14px;text-align:center}
 
+.notice{background:var(--accent-soft);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;
+  margin-bottom:12px;font-size:14px;display:flex;flex-direction:column;gap:10px}
+.notice-actions{display:flex;gap:8px;justify-content:flex-end}
+.notice-actions .btn{font-size:14px;padding:7px 12px}
 .lists{display:grid;gap:10px}
 .list-card{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);
   border-radius:14px;padding:6px 8px 6px 4px}
@@ -140,3 +144,7 @@ dialog menu{display:flex;gap:8px;justify-content:flex-end;padding:0;margin:4px 0
 
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;background:#16181d;color:#fff;
   padding:10px 16px;border-radius:999px;font-size:14px;z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.3)}
+.update-bar{position:fixed;left:12px;right:12px;bottom:calc(88px + env(safe-area-inset-bottom,0));max-width:520px;margin:0 auto;
+  display:flex;align-items:center;gap:12px;justify-content:space-between;background:var(--card);border:1px solid var(--accent);
+  border-radius:14px;padding:8px 8px 8px 14px;font-size:14px;z-index:45;box-shadow:0 8px 20px rgba(0,0,0,.2)}
+.update-bar .btn{font-size:14px;padding:7px 12px}
