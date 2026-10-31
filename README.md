@@ -6,6 +6,8 @@ PWA für Einkaufszettel
 - Pro Liste: Supermarkt und Datum, Archiv vergangener Einkäufe und Statistik
 - Listen und Abschnitte frei sortierbar; Produkte lassen sich in andere Listen verschieben oder kopieren
 - Suche mit Schnell-Hinzufügen (Enter legt einen nicht gefundenen Begriff als Produkt an)
+- Rezepte scannen (Foto oder Screenshot, Texterkennung direkt auf dem Gerät) oder als Text einfügen;
+  fehlende Zutaten per Fingertipp auf eine Liste übernehmen, Rezepte merken und über die Suche wiederfinden
 - Listen lassen sich per Einladungslink mit anderen teilen und werden live abgeglichen (siehe unten)
 - Private Listen bleiben lokal im Browser; Backup/Wiederherstellung als JSON über das Menü der Startseite,
   mit Erinnerung, wenn das letzte Backup älter als 30 Tage ist
@@ -36,6 +38,15 @@ Der Punkt am Teilen-Symbol oben zeigt den Status: grün = aktuell, gelb = wird g
 
 Wer den Link kennt, kann die Liste lesen und bearbeiten. „Teilen beenden“ löst die Liste nur auf dem
 eigenen Gerät (sie bleibt als private Kopie erhalten).
+
+## Rezepte
+**Menü → Rezept scannen** öffnet Kamera oder Galerie. Die Texterkennung ([Tesseract.js](https://tesseract.projectnaptha.com/))
+läuft im Browser; beim ersten Mal werden ca. 5 MB geladen, danach funktioniert sie auch offline. Die erkannten
+Zutaten werden mit Menge angezeigt und, wo möglich, den Abschnitten der eigenen Listen zugeordnet.
+
+In der installierten App (Chrome, Android) erscheint „Einkaufszettel“ außerdem im **Teilen**-Menü anderer Apps:
+Screenshots oder markierter Rezepttext lassen sich direkt übergeben. Nach dem Update kann es einige Zeit dauern,
+bis Android den neuen Eintrag anzeigt – notfalls die App einmal neu installieren.
 
 ## Veröffentlichen mit GitHub Pages
 Im Repository unter **Settings → Pages** als Quelle „Deploy from a branch“, Branch `main`, Ordner `/ (root)`

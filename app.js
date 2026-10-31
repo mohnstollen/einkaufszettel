@@ -42,7 +42,7 @@ function newList(name, template = []) {
 }
 function defaultDb() {
   return { lists: [newList('Lebensmittel', defaultTemplate())], template: defaultTemplate(),
-    since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '' };
+    recipes: [], since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '' };
 }
 
 /* ---------- Laden / Migration / Prüfung ---------- */
@@ -97,7 +97,12 @@ function toDb(s) {
     template: Array.isArray(s.template)
       ? s.template.filter(isObj).map(t => ({ name: str(t.name).trim() || 'Allgemein',
           products: arr(t.products).filter(n => str(n).trim()).map(n => n.trim()) }))
-      : defaultTemplate() };
+      : defaultTemplate(),
+    recipes: arr(s.recipes).filter(r => isObj(r) && str(r.name).trim()).map(r => ({
+      id: str(r.id) || uid(), name: r.name.trim(), updatedAt: num(r.updatedAt),
+      ingredients: arr(r.ingredients).filter(i => isObj(i) && str(i.name).trim())
+        .map(i => ({ name: i.name.trim(), amount: str(i.amount) }))
+    })) };
 }
 function load() {
   try {
@@ -152,10 +157,11 @@ function refresh() { if (state) render(); else renderHome(); }
 
 function route() {
   const invite = location.hash.match(/^#\/teilen\/([a-z0-9]{20,})$/);
+  const shareImport = location.hash === '#/rezept-import';
   const m = location.hash.match(/^#\/liste\/(.+)$/);
   if (state && state.shared) { state.seenAt = Date.now(); save(); }
   state = m ? db.lists.find(l => l.id === m[1]) || null : null;
-  if (!state) fromHome = false;
+  if (!state) fromHome = false; else lastListId = state.id;
   $('#viewHome').classList.toggle('hidden', !!state);
   $('#viewList').classList.toggle('hidden', !state);
   $('#fab').title = state ? 'Produkt hinzufügen' : 'Neue Liste';
@@ -168,6 +174,7 @@ function route() {
   refresh();
   window.scrollTo(0, 0);
   if (invite) joinShared(invite[1]);
+  if (shareImport) { history.replaceState(null, '', location.pathname); importShared(); }
 }
 window.addEventListener('hashchange', route);
 function openList(id) { fromHome = true; location.hash = '#/liste/' + id; }
@@ -386,6 +393,12 @@ function render() {
       listEl.prepend(suggestionBox(rest));
     }
     listEl.prepend(quickAddButton($('#search').value.trim(), exact));
+    const recipes = db.recipes.filter(r => lc(r.name).includes(q));
+    if (recipes.length) {
+      const none = listEl.querySelector(':scope > .empty');
+      if (none) none.remove();
+      listEl.prepend(recipeBox(recipes, q));
+    }
   }
   $('#counter').textContent = doneTotal + ' / ' + needTotal;
   $('#btnOnlyNeeded').classList.toggle('on', state.onlyNeeded);
@@ -854,6 +867,7 @@ $('#menu').addEventListener('click', e => {
      renameList: () => openListDialog(state),
      share: () => shareList(state),
      orderSections: () => openOrder('Abschnitte sortieren', () => state.sections),
+     recipes: openRecipes, scan: scanRecipe,
      archive: () => { archiveTab = 'list'; openArchive(); },
      stats: () => { archiveTab = 'stats'; openArchive(); },
      clearMarks, export: exportText })[btn.dataset.act]();
@@ -861,13 +875,17 @@ $('#menu').addEventListener('click', e => {
 $('#homeMenu').addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
   closeMenus();
-  ({ newList: () => openListDialog(null), orderLists: () => openOrder('Listen sortieren', () => db.lists),
+  ({ newList: () => openListDialog(null), orderLists: () => openOrder('Listen sortieren', () => db.lists), recipes: openRecipes,
      backup: backupJSON, name: () => askName(true),
      restore: () => $('#fileInput').click() })[btn.dataset.act]();
 });
 $('#fab').addEventListener('click', () => state ? openProduct(null, null) : openListDialog(null));
 $('#search').addEventListener('input', render);
-$('#search').addEventListener('keydown', e => { if (e.key === 'Enter' && $('#quickAdd')) { e.preventDefault(); $('#quickAdd').click(); } });
+$('#search').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const hit = $('#recipeHit') || $('#quickAdd'); // exakt passendes Rezept hat Vorrang
+  if (hit) { e.preventDefault(); hit.click(); }
+});
 $('#btnOnlyNeeded').addEventListener('click', () => { state.onlyNeeded = !state.onlyNeeded; save(); render(); });
 
 function clearMarks() {
@@ -909,7 +927,8 @@ $('#fileInput').addEventListener('change', async e => {
       if (confirm('Alle Listen durch das Backup ersetzen (' + data.lists.length + ' Listen)?')) {
         if (sync) db.lists.forEach(l => sync.unwatch(l));
         db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil, userName: db.userName,
-          template: Array.isArray(s.template) ? data.template : db.template };
+          template: Array.isArray(s.template) ? data.template : db.template,
+          recipes: Array.isArray(s.recipes) ? data.recipes : db.recipes };
         save(); renderHome(); toast('Backup geladen');
         if (db.lists.some(l => l.shared)) loadSync().then(m => m && db.lists.forEach(l => l.shared && m.watch(l)));
       }
@@ -1019,6 +1038,300 @@ function renderSyncState() {
   el.title = text; el.setAttribute('aria-label', text);
 }
 $('#syncState').addEventListener('click', () => shareList(state));
+
+/* ---------- Rezepte: scannen, Text einfügen, merken, Zutaten übernehmen (Parser: recipe-parse.js) ---------- */
+const CDN = 'https://cdn.jsdelivr.net/npm/';
+let lastListId = null;
+let tesseractLoading = null;
+
+function loadTesseract() {
+  if (!tesseractLoading) tesseractLoading = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = CDN + 'tesseract.js@5.1.1/dist/tesseract.min.js';
+    s.onload = () => res(window.Tesseract);
+    s.onerror = () => { tesseractLoading = null; s.remove(); rej(new Error('Tesseract nicht ladbar')); };
+    document.head.appendChild(s);
+  });
+  return tesseractLoading;
+}
+/* Große Fotos verkleinern (beschleunigt die Erkennung) und einen weißen Rand ergänzen –
+   Text, der direkt am Bildrand klebt, wird sonst oft abgeschnitten erkannt */
+async function prepareImage(file) {
+  const img = await createImageBitmap(file);
+  const f = Math.min(1, 2000 / Math.max(img.width, img.height));
+  const w = Math.round(img.width * f), h = Math.round(img.height * f), pad = 40;
+  const c = document.createElement('canvas');
+  c.width = w + 2 * pad; c.height = h + 2 * pad;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(img, pad, pad, w, h);
+  // Graustufen + Kontrast strecken (hilft bei Fotos mit schwachem Licht oder grauem Papier)
+  const px = ctx.getImageData(0, 0, c.width, c.height), d = px.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i += 4) hist[d[i] = d[i + 1] = d[i + 2] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0]++;
+  const n = d.length / 4;
+  let lo = 0, hi = 255, acc = 0;
+  while (lo < 255 && (acc += hist[lo]) < n * 0.02) lo++;
+  acc = 0;
+  while (hi > 0 && (acc += hist[hi]) < n * 0.3) hi--; // heller Hintergrund dominiert
+  if (hi - lo > 20) for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, (d[i] - lo) * 255 / (hi - lo)));
+  ctx.putImageData(px, 0, 0);
+  return c;
+}
+async function recognizeText(file) {
+  showBusy('Texterkennung wird geladen…', 0);
+  try {
+    const T = await loadTesseract();
+    const worker = await T.createWorker('deu', 1, {
+      workerPath: CDN + 'tesseract.js@5.1.1/dist/worker.min.js',
+      corePath: CDN + 'tesseract.js-core@5.1.1',
+      langPath: CDN + '@tesseract.js-data/deu@1.0.0/4.0.0_best_int',
+      logger: m => {
+        if (m.status === 'recognizing text') showBusy('Text wird erkannt…', m.progress);
+        else if (/load/.test(m.status)) showBusy('Texterkennung wird geladen (beim ersten Mal ca. 5 MB)…', m.progress);
+      }
+    });
+    const { data } = await worker.recognize(await prepareImage(file));
+    await worker.terminate();
+    return data.text;
+  } finally { hideBusy(); }
+}
+function showBusy(text, progress) {
+  $('#busyText').textContent = text;
+  $('#busyBar').value = progress || 0;
+  if (!$('#dlgBusy').open) $('#dlgBusy').showModal();
+}
+function hideBusy() { if ($('#dlgBusy').open) $('#dlgBusy').close(); }
+$('#dlgBusy').addEventListener('cancel', e => e.preventDefault());
+
+function scanRecipe() { $('#recipeFile').click(); }
+$('#recipeFile').addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (f) recipeFromImage(f);
+});
+async function recipeFromImage(file, title) {
+  let text;
+  try { text = await recognizeText(file); }
+  catch (err) { console.error(err); toast('Texterkennung fehlgeschlagen – beim ersten Mal ist Internet nötig.'); return; }
+  recipeFromText(text, title);
+}
+function recipeFromText(text, title) {
+  const r = parseRecipe(text);
+  if (!r.items.length) {
+    // nichts erkannt → Text zum Nachbessern anzeigen
+    openPaste(text, 'Keine Zutaten erkannt. Du kannst den Text hier korrigieren oder ergänzen.');
+    return;
+  }
+  openRecipe({ id: null, name: r.title || title || '', ingredients: r.items });
+}
+
+/* Text einfügen (z. B. aus Google Lens oder von einer Webseite kopiert) */
+function openPaste(text, hint) {
+  $('#pasteText').value = text || '';
+  $('#pasteHint').textContent = hint || 'Füge die Zutatenliste ein – eine Zutat pro Zeile, z. B. „200 g Mehl“.';
+  $('#dlgPaste').showModal();
+  setTimeout(() => $('#pasteText').focus(), 50);
+}
+$('#formPaste').addEventListener('submit', e => {
+  if (!(e.submitter && e.submitter.value === 'ok')) return;
+  const text = $('#pasteText').value;
+  if (!text.trim()) { e.preventDefault(); return; }
+  setTimeout(() => recipeFromText(text), 0);
+});
+
+/* Über „Teilen“ aus anderen Apps empfangen (Service Worker legt Bild/Text in den Cache „share-inbox“) */
+async function importShared() {
+  try {
+    const inbox = await caches.open('share-inbox');
+    const meta = await inbox.match('meta').then(r => r ? r.json() : {});
+    const img = await inbox.match('image').then(r => r ? r.blob() : null);
+    await caches.delete('share-inbox');
+    const title = String(meta.title || '').split(/\s[|–-]\s/)[0].replace(/\b(rezept|rezepte)\b/gi, '').trim();
+    if (img) return recipeFromImage(img, title);
+    if (String(meta.text || '').replace(/https?:\S+/g, '').trim()) return recipeFromText(meta.text, title);
+    if (meta.url || meta.text) toast('Links kann die App noch nicht auslesen – teile einen Screenshot oder markierten Text.');
+  } catch (err) { console.error(err); toast('Geteilter Inhalt konnte nicht gelesen werden.'); }
+}
+
+/* Zuordnung: dasselbe Produkt in einer Liste bzw. in allen Listen und der Vorlage finden */
+function findInList(list, key) {
+  for (const sec of list.sections) for (const p of sec.products) if (ingredientKey(p.name) === key) return { sec, p };
+  return null;
+}
+function findInCatalog(key) {
+  for (const l of db.lists) for (const s of l.sections) for (const p of s.products)
+    if (ingredientKey(p.name) === key) return { name: p.name, section: s.name, from: l.name };
+  for (const t of db.template) for (const n of t.products)
+    if (ingredientKey(n) === key) return { name: n, section: t.name, from: 'Vorlage' };
+  return null;
+}
+
+let recipeDraft = null; // { id, rows: [{ name, amount, checked }] }
+const recipeTarget = () => db.lists.find(l => l.id === $('#rList').value) || null;
+
+function openRecipe(recipe) {
+  recipeDraft = { id: recipe.id, rows: recipe.ingredients.map(i => ({ name: i.name, amount: i.amount || '', checked: false })) };
+  $('#dlgRecipeTitle').textContent = recipe.id ? recipe.name : 'Rezept übernehmen';
+  $('#rName').value = recipe.name || '';
+  $('#rSave').checked = true;
+  $('#rSaveWrap').classList.toggle('hidden', !!recipe.id); // gemerkte Rezepte werden beim Übernehmen aktualisiert
+  $('#rDelete').classList.toggle('hidden', !recipe.id);
+  const sel = $('#rList');
+  sel.innerHTML = '';
+  db.lists.forEach(l => { const o = document.createElement('option'); o.value = l.id; o.textContent = l.name; sel.appendChild(o); });
+  const target = state || db.lists.find(l => l.id === lastListId) || db.lists[0];
+  if (target) sel.value = target.id;
+  $('#rListWrap').classList.toggle('hidden', !db.lists.length);
+  renderRecipeRows();
+  $('#dlgRecipe').showModal();
+}
+
+function rowInfo(row) {
+  const key = ingredientKey(row.name);
+  if (!key) return { text: '' };
+  const list = recipeTarget();
+  const own = list && findInList(list, key);
+  if (own && own.p.needed) return { text: 'steht schon auf dem Zettel', onList: true };
+  if (own) return { text: own.sec.name };
+  const cat = findInCatalog(key);
+  return { text: cat ? cat.section + ' · ' + cat.from : 'neues Produkt' };
+}
+function renderRecipeRows() {
+  const ul = $('#rItems');
+  ul.innerHTML = '';
+  if (!recipeDraft.rows.length) ul.innerHTML = '<li class="empty">Keine Zutaten</li>';
+  recipeDraft.rows.forEach((row, i) => {
+    const info = rowInfo(row);
+    if (info.onList) row.checked = false;
+    const li = document.createElement('li');
+    li.className = 'recipe-row' + (info.onList ? ' have' : '') + (row.checked ? ' on' : '');
+    li.innerHTML = '<label class="rr-check"><input type="checkbox"></label>' +
+      '<div class="rr-main"><input class="rr-name" type="text" autocomplete="off" aria-label="Zutat">' +
+      '<div class="rr-meta"><input class="rr-amount" type="text" autocomplete="off" placeholder="Menge" aria-label="Menge">' +
+      '<span class="rr-info"></span></div></div>';
+    const cb = li.querySelector('input[type=checkbox]');
+    cb.checked = row.checked; cb.disabled = !!info.onList;
+    cb.setAttribute('aria-label', (row.name || 'Zutat') + ' übernehmen');
+    cb.addEventListener('change', () => { row.checked = cb.checked; li.classList.toggle('on', cb.checked); updateRecipeButton(); });
+    const nm = li.querySelector('.rr-name');
+    nm.value = row.name;
+    nm.addEventListener('input', () => { row.name = nm.value; updateRecipeButton(); });
+    nm.addEventListener('change', renderRecipeRows); // Zuordnung neu prüfen
+    const am = li.querySelector('.rr-amount');
+    am.value = row.amount;
+    am.addEventListener('input', () => { row.amount = am.value; });
+    li.querySelector('.rr-info').textContent = info.text;
+    const rm = iconBtn('act del', 'trash', 'Zutat entfernen');
+    rm.addEventListener('click', () => { recipeDraft.rows.splice(i, 1); renderRecipeRows(); });
+    li.appendChild(rm);
+    ul.appendChild(li);
+  });
+  updateRecipeButton();
+}
+function updateRecipeButton() {
+  const n = recipeDraft.rows.filter(r => r.checked && r.name.trim()).length;
+  const keep = !!recipeDraft.id || $('#rSave').checked;
+  $('#rOk').textContent = n ? n + (n === 1 ? ' Zutat' : ' Zutaten') + ' übernehmen' : keep ? 'Speichern' : 'Schließen';
+  $('#rOk').disabled = n > 0 && !recipeTarget();
+}
+$('#rList').addEventListener('change', renderRecipeRows);
+$('#rSave').addEventListener('change', updateRecipeButton);
+$('#rAddRow').addEventListener('click', () => {
+  recipeDraft.rows.push({ name: '', amount: '', checked: true });
+  renderRecipeRows();
+  const names = $('#rItems').querySelectorAll('.rr-name');
+  names[names.length - 1].focus();
+});
+$('#rDelete').addEventListener('click', () => {
+  const r = db.recipes.find(x => x.id === recipeDraft.id);
+  if (!r || !confirm('Rezept „' + r.name + '“ löschen?')) return;
+  db.recipes = db.recipes.filter(x => x !== r);
+  save(); $('#dlgRecipe').close(); recipeDraft = null; refresh(); toast('Rezept gelöscht');
+});
+
+function saveRecipe(id, name, rows) {
+  const data = { name, ingredients: rows.map(r => ({ name: r.name.trim(), amount: r.amount.trim() })), updatedAt: Date.now() };
+  let r = id && db.recipes.find(x => x.id === id);
+  if (!r) {
+    const same = db.recipes.find(x => lc(x.name) === lc(name));
+    if (same && confirm('Es gibt schon ein Rezept „' + same.name + '“. Ersetzen?')) r = same;
+  }
+  if (r) Object.assign(r, data); else db.recipes.push({ id: uid(), ...data });
+}
+/* Zutat auf die Liste setzen: vorhandenes Produkt markieren, sonst im passenden Abschnitt anlegen */
+function addIngredient(list, row, recipeName) {
+  const key = ingredientKey(row.name);
+  const note = [row.amount.trim(), recipeName].filter(Boolean).join(' · ');
+  const own = findInList(list, key);
+  if (own) { if (!own.p.needed) { markNeeded(own.p); own.p.note = note; } return; }
+  const cat = findInCatalog(key);
+  const secName = cat ? cat.section : list.sections.some(s => lc(s.name) === 'sonstiges') ? 'Sonstiges' : 'Allgemein';
+  let sec = list.sections.find(s => lc(s.name) === lc(secName));
+  if (!sec) { sec = { id: uid(), name: secName, collapsed: false, products: [] }; list.sections.push(sec); }
+  addProductTo(sec, cat ? cat.name : row.name.trim(), note, true);
+}
+$('#formRecipe').addEventListener('submit', e => {
+  if (!(e.submitter && e.submitter.value === 'ok')) { recipeDraft = null; return; }
+  const rows = recipeDraft.rows.filter(r => r.name.trim());
+  const name = $('#rName').value.trim();
+  const keep = !!recipeDraft.id || $('#rSave').checked;
+  if (keep && !name) { e.preventDefault(); $('#rName').focus(); toast('Bitte gib dem Rezept einen Namen'); return; }
+  if (keep) saveRecipe(recipeDraft.id, name, rows);
+  const list = recipeTarget();
+  const picked = rows.filter(r => r.checked);
+  if (list && picked.length) {
+    picked.forEach(r => addIngredient(list, r, name));
+    toast(picked.length + (picked.length === 1 ? ' Zutat' : ' Zutaten') + ' auf „' + list.name + '“' + (keep ? ' – Rezept gemerkt' : ''));
+  } else if (keep) toast('Rezept gespeichert');
+  recipeDraft = null;
+  $('#search').value = '';
+  save(); refresh();
+});
+
+/* Rezepte-Übersicht */
+function openRecipes() {
+  $('#recipeSearch').value = '';
+  renderRecipeList();
+  $('#dlgRecipes').showModal();
+}
+function renderRecipeList() {
+  const q = lc($('#recipeSearch').value.trim());
+  const box = $('#recipeList');
+  box.innerHTML = '';
+  const found = db.recipes.filter(r => !q || lc(r.name).includes(q)).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  if (!found.length) {
+    box.innerHTML = '<div class="empty">' + (db.recipes.length ? 'Kein Rezept gefunden.'
+      : 'Noch keine Rezepte. Fotografiere ein Rezept, nimm einen Screenshot oder füge den Text ein.') + '</div>';
+    return;
+  }
+  found.forEach(r => box.appendChild(recipeButton(r, () => { $('#dlgRecipes').close(); openRecipe(r); })));
+}
+function recipeButton(r, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'recipe-btn';
+  b.innerHTML = ICON.recipe + '<span class="rb-name"></span><span class="rb-cnt"></span>';
+  b.querySelector('.rb-name').textContent = r.name;
+  b.querySelector('.rb-cnt').textContent = r.ingredients.length + ' Zutaten';
+  b.addEventListener('click', onClick);
+  return b;
+}
+$('#recipeSearch').addEventListener('input', renderRecipeList);
+$('#btnScan').addEventListener('click', () => { $('#dlgRecipes').close(); scanRecipe(); });
+$('#btnPaste').addEventListener('click', () => { $('#dlgRecipes').close(); openPaste(); });
+
+/* Treffer in der Listensuche */
+function recipeBox(recipes, q) {
+  const box = document.createElement('div');
+  box.className = 'suggest recipes';
+  box.innerHTML = '<div class="suggest-head">Rezepte</div>';
+  recipes.slice(0, 5).forEach(r => {
+    const b = recipeButton(r, () => openRecipe(r));
+    if (lc(r.name) === q) b.id = 'recipeHit';
+    box.appendChild(b);
+  });
+  return box;
+}
 
 /* ---------- App-Update ---------- */
 function showUpdate(worker) {
