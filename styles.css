@@ -207,3 +207,4 @@ dialog.busy{width:min(340px,86vw);text-align:center}
 dialog.busy p{margin:6px 0 12px;font-size:15px}
 dialog.busy progress{width:100%;accent-color:var(--accent)}
 .share-actions .btn .ic{vertical-align:-0.2em}
+.rr-source{display:inline-block;margin:-8px 0 12px;font-size:13px;color:var(--accent);text-decoration:none}

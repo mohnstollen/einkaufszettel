@@ -217,7 +217,7 @@
     <h2>Rezepte</h2>
     <div class="share-actions">
       <button type="button" class="btn primary" id="btnScan"><span data-icon="camera"></span> Foto / Screenshot</button>
-      <button type="button" class="btn" id="btnPaste">Text einfügen</button>
+      <button type="button" class="btn" id="btnPaste">Text oder Link</button>
     </div>
     <input type="search" id="recipeSearch" placeholder="Rezept suchen…" autocomplete="off">
     <div id="recipeList" class="recipe-list"></div>
@@ -230,6 +230,7 @@
 <dialog id="dlgRecipe">
   <form method="dialog" id="formRecipe">
     <h2 id="dlgRecipeTitle">Rezept übernehmen</h2>
+    <a id="rSource" class="rr-source hidden" target="_blank" rel="noopener"></a>
     <label>Name des Rezepts
       <input type="text" id="rName" autocomplete="off" placeholder="z. B. Lasagne">
     </label>
@@ -250,9 +251,9 @@
 
 <dialog id="dlgPaste">
   <form method="dialog" id="formPaste">
-    <h2>Text einfügen</h2>
+    <h2>Text oder Link einfügen</h2>
     <p class="info" id="pasteHint"></p>
-    <textarea id="pasteText" rows="12" placeholder="Zutaten&#10;200 g Mehl&#10;3 Eier&#10;1 Prise Salz"></textarea>
+    <textarea id="pasteText" rows="12" placeholder="https://www.chefkoch.de/rezepte/…&#10;&#10;oder die Zutaten:&#10;200 g Mehl&#10;3 Eier&#10;1 Prise Salz"></textarea>
     <menu>
       <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
       <button value="ok" class="btn primary" type="submit">Zutaten erkennen</button>
@@ -274,6 +275,7 @@
 </div>
 
 <script src="icons.js"></script>
+<script src="config.js"></script>
 <script src="recipe-parse.js"></script>
 <script src="app.js"></script>
 <script>
