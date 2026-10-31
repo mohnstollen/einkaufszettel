@@ -1,5 +1,6 @@
 /* Zutaten aus erkanntem oder eingefügtem Rezepttext lesen.
    parseRecipe(text) → { title, items: [{ name, amount }] }
+   parseIngredientList(['200 g Mehl', …]) → items (für strukturierte Zutatenlisten von Rezeptseiten)
    Reine Funktionen ohne DOM – auch mit Node testbar. */
 
 const UNITS = [
@@ -7,14 +8,14 @@ const UNITS = [
   'el', 'tl', 'msp', 'prisen?', 'pck', 'pkt', 'päckchen', 'packung(?:en)?', 'pkg',
   'dosen?', 'becher', 'bund', 'stück', 'stk', 'zehen?', 'scheiben?', 'tassen?', 'gläser', 'glas',
   'würfel', 'cm', 'handvoll', 'spritzer', 'schuss', 'tropfen', 'blatt', 'blätter', 'stangen?', 'stiele?',
-  'zweige?', 'köpfe', 'kopf', 'knollen?', 'beutel', 'flaschen?', 'portionen?', 'rollen?', 'tüten?', 'pfund'
+  'zweige?', 'köpfe', 'kopf', 'knollen?', 'beutel', 'flaschen?', 'portionen?', 'rollen?', 'tüten?', 'pfund', 'platten?'
 ].join('|');
 const NUM = '(?:\\d+(?:[.,]\\d+)?(?:\\s*/\\s*\\d+)?|[½¼¾⅓⅔⅛])';
 const QTY = NUM + '(?:\\s*' + NUM + ')?(?:\\s*[-–]\\s*' + NUM + ')?';
 const UNIT = '(?:(?:' + UNITS + ')\\.?(?=\\s|$|,))';
 const LEAD_RE = new RegExp('^(?:ca\\.?\\s*)?(' + QTY + '(?:\\s*' + UNIT + ')?|' + UNIT + ')\\s*', 'i');
 const TRAIL_RE = new RegExp('\\s+((?:ca\\.?\\s*)?' + QTY + '\\s*' + UNIT + '?)$', 'i');
-const VAGUE_RE = /^(etwas|evtl\.?|eventuell|n\.\s?b\.?|nach belieben|nach geschmack|reichlich|wenig|einige|ein paar|eine?n?|einige)\s+/i;
+const VAGUE_RE = /^(etwas|evtl\.?|eventuell|n\.\s?b\.?|nach belieben|nach geschmack|reichlich|wenig|einige|ein paar|eine[nrsm]?|ein|einige)\s+/i;
 const ADJ_RE = /^(kleine?[rns]?|große?[rns]?|mittelgroße?[rns]?|frische?[rns]?|reife?[rns]?|weiche?[rns]?|kalte?[rns]?|warme?[rns]?|getrocknete?[rns]?|gemahlene?[rns]?|geriebene?[rns]?|gehackte?[rns]?|zimmerwarme?[rns]?|tiefgekühlte?[rns]?|tk)\s+/i;
 const STOP_RE = /^(z?ubereitung|anleitung|so geht'?s|so wird'?s gemacht|arbeitsschritte|schritt\s*1|nährwerte|zubereitungsschritte)\b/i;
 const SKIP_RE = /^(z?utaten\b|f?[üu]r\s+\d|\d+\s+(portionen|personen|stück)\b|portionen|personen|arbeitszeit|kochzeit|backzeit|ruhezeit|gesamtzeit|schwierigkeit|kalorien|zubereitungszeit|tipp\b|rezept\b|drucken|teilen|merken|einkaufsliste|(back|spring|kasten|auflauf|tarte)?form\s*:|ø)/i;
@@ -23,7 +24,7 @@ const isHeading = l => /^f[üu]r\s+(den|die|das)\s/i.test(l) || /:$/.test(l) ||
   (l.length >= 4 && /[A-ZÄÖÜ]{3}/.test(l) && l === l.toUpperCase());
 
 function cleanName(s) {
-  s = s.replace(/^[\s\-–•*·▢☐□○◯✓✔]+/, '');
+  s = s.replace(/^[\s\-–•*·▢☐□○◯✓✔]+/, '').replace(/\(.*?\)/g, ' '); // Klammern zuerst – sie enthalten oft Kommas
   s = s.split(/\s*[,;:]\s*|\s+[-–]\s+|\s+oder\s+|\s+zum\s+|\s+für\s+(?:die|den|das)\s+/i)[0];
   s = s.replace(/\(.*?\)/g, ' ').replace(/[()]/g, ' ');
   for (let i = 0; i < 3; i++) s = s.replace(VAGUE_RE, '').replace(ADJ_RE, '');
@@ -31,11 +32,17 @@ function cleanName(s) {
   return s ? s[0].toUpperCase() + s.slice(1) : '';
 }
 
-/* Eine Zeile → [{ name, amount }] (leer, wenn die Zeile keine Zutat ist) */
-function parseLine(line) {
-  let s = line.replace(/\s+/g, ' ').trim().replace(/^[\-–•*·▢☐□○◯✓✔]+\s*/, '');
-  if (!/[a-zäöüß]{2}/i.test(s) || s.length > 70 || /https?:|www\.|^\d{1,2}:\d{2}/i.test(s)) return [];
+/* Eine Zeile → [{ name, amount }] (leer, wenn die Zeile keine Zutat ist).
+   strict = false für verlässliche Zutatenlisten: keine Filter gegen OCR-Müll und Anleitungssätze */
+function parseLine(line, strict = true) {
+  let s = line.replace(/\s+/g, ' ').trim().replace(/^[\-–•*·▢☐□○◯✓✔]+\s*/, '')
+    .replace(/([a-zäöü])(?:\/|\()(n|en|e|s|er)\)?(?=[\s,.]|$)/gi, '$1'); // „Zehe/n“, „Dose(n)“ → „Zehe“, „Dose“
+  if (!/[a-zäöüß]{2}/i.test(s)) return [];
+  if (strict && (s.length > 70 || /https?:|www\.|^\d{1,2}:\d{2}/i.test(s))) return [];
   if (/:$/.test(s)) return []; // Zwischenüberschrift wie „Für die Soße:“
+  // „Saft von 1 Zitrone“, „Abrieb einer Orange“ → Zutat Zitrone/Orange, Hinweis in der Menge
+  const part = s.match(/^(saft|abrieb|schale|zesten?)\s+(?:von\s+)?(.+)$/i);
+  if (part) s = part[2];
   let amount = '';
   const lead = s.match(LEAD_RE);
   if (lead) { amount = lead[1].trim(); s = s.slice(lead[0].length); }
@@ -47,13 +54,35 @@ function parseLine(line) {
     .replace(/^(\d*0)9g$/, '$1 g') // typischer OCR-Fehler: „50 g“ → „509g“
     .replace(/\bmi$/i, 'ml') // „ml“ als „mi“ gelesen
     .replace(/(\d)([a-zäöü])/i, '$1 $2'); // „2EL“ → „2 EL“
-  if (s.split(' ').length > 6) return []; // eher ein Satz aus der Anleitung
+  // „2 Zehe/n“ wurde oben zu „Zehe“ – bei mehr als einem Stück wieder Mehrzahl
+  amount = amount.replace(/^(\d+(?:[.,]\d+)?|\d+\s*[-–]\s*\d+)\s+(zehe|dose|platte|scheibe|stange|tasse|flasche|knolle|rolle|tüte|prise)$/i,
+    (m, n, u) => /[-–]/.test(n) || parseFloat(n.replace(',', '.')) > 1 ? n + ' ' + u + 'n' : m);
+  if (part) amount = (amount ? amount + ' ' : '') + '(' + part[1][0].toUpperCase() + part[1].slice(1).toLowerCase() + ')';
+  if (strict && s.split(' ').length > 6) return []; // eher ein Satz aus der Anleitung
   // „Salz und Pfeffer“, „Salz, Pfeffer“ ohne Menge → zwei Zutaten
   // (nur Teile mit großem Anfangsbuchstaben – „Parmesan, frisch gerieben“ bleibt eine Zutat)
   const parts = !amount && /\s+und\s+|,\s*/.test(s)
     ? s.split(/\s+und\s+|,\s*/).filter((p, i) => i === 0 || /^[A-ZÄÖÜ]/.test(p)) : [s];
   return parts.map(p => ({ name: cleanName(p), amount: parts.length > 1 ? '' : amount }))
-    .filter(i => i.name.length > 1 && i.name.split(' ').length <= 4);
+    .filter(i => i.name.length > 1 && (!strict || i.name.split(' ').length <= 4));
+}
+
+/* Gleiche Zutaten zusammenfassen – z. B. Zucker für Teig und Füllung → „150 g + 150 g“ */
+function mergeItems(list) {
+  const items = [];
+  const byKey = new Map();
+  list.forEach(i => {
+    const k = ingredientKey(i.name);
+    if (!k) return;
+    const prev = byKey.get(k);
+    if (prev) { if (i.amount) prev.amount = prev.amount ? prev.amount + ' + ' + i.amount : i.amount; return; }
+    byKey.set(k, i); items.push(i);
+  });
+  return items;
+}
+
+function parseIngredientList(lines) {
+  return mergeItems(lines.flatMap(l => isHeading(String(l)) ? [] : parseLine(String(l), false)));
 }
 
 /* Vergleichsschlüssel: Groß/klein, Umlaute, Klammern, einfache Plural-Endungen egal */
@@ -90,16 +119,7 @@ function parseRecipe(text) {
   }
   const block = first >= 0 ? body.slice(first, last + 1) : body.slice(0, (body.findIndex(b => STOP_RE.test(b.line)) + 1 || body.length + 1) - 1);
 
-  const items = [];
-  const byKey = new Map();
-  block.forEach(b => b.items.forEach(i => {
-    const k = ingredientKey(i.name);
-    if (!k) return;
-    const prev = byKey.get(k);
-    if (prev) { if (i.amount) prev.amount = prev.amount ? prev.amount + ' + ' + i.amount : i.amount; return; } // z. B. Zucker für Teig und Füllung
-    byKey.set(k, i); items.push(i);
-  }));
-  return { title: head > 0 ? title : '', items };
+  return { title: head > 0 ? title : '', items: mergeItems(block.flatMap(b => b.items)) };
 }
 
-if (typeof module !== 'undefined') module.exports = { parseRecipe, parseLine, ingredientKey };
+if (typeof module !== 'undefined') module.exports = { parseRecipe, parseLine, parseIngredientList, ingredientKey };

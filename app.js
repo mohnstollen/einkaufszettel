@@ -99,7 +99,7 @@ function toDb(s) {
           products: arr(t.products).filter(n => str(n).trim()).map(n => n.trim()) }))
       : defaultTemplate(),
     recipes: arr(s.recipes).filter(r => isObj(r) && str(r.name).trim()).map(r => ({
-      id: str(r.id) || uid(), name: r.name.trim(), updatedAt: num(r.updatedAt),
+      id: str(r.id) || uid(), name: r.name.trim(), updatedAt: num(r.updatedAt), url: str(r.url), yield: str(r.yield),
       ingredients: arr(r.ingredients).filter(i => isObj(i) && str(i.name).trim())
         .map(i => ({ name: i.name.trim(), amount: str(i.amount) }))
     })) };
@@ -1131,7 +1131,9 @@ function recipeFromText(text, title) {
 /* Text einfügen (z. B. aus Google Lens oder von einer Webseite kopiert) */
 function openPaste(text, hint) {
   $('#pasteText').value = text || '';
-  $('#pasteHint').textContent = hint || 'Füge die Zutatenliste ein – eine Zutat pro Zeile, z. B. „200 g Mehl“.';
+  $('#pasteHint').textContent = hint || (RECIPE_WORKER_URL
+    ? 'Füge den Link zu einem Rezept ein oder die Zutatenliste – eine Zutat pro Zeile, z. B. „200 g Mehl“.'
+    : 'Füge die Zutatenliste ein – eine Zutat pro Zeile, z. B. „200 g Mehl“.');
   $('#dlgPaste').showModal();
   setTimeout(() => $('#pasteText').focus(), 50);
 }
@@ -1139,8 +1141,32 @@ $('#formPaste').addEventListener('submit', e => {
   if (!(e.submitter && e.submitter.value === 'ok')) return;
   const text = $('#pasteText').value;
   if (!text.trim()) { e.preventDefault(); return; }
-  setTimeout(() => recipeFromText(text), 0);
+  const link = text.trim().match(/^https?:\/\/\S+$/);
+  setTimeout(() => link ? recipeFromUrl(link[0]) : recipeFromText(text), 0);
 });
+
+/* Rezept-Link über den Cloudflare Worker auslesen (schema.org/Recipe der Seite) */
+async function recipeFromUrl(url, title) {
+  if (!RECIPE_WORKER_URL) { toast('Rezept-Links sind noch nicht eingerichtet – teile einen Screenshot oder markierten Text.'); return; }
+  showBusy('Rezept wird geladen…', 0.4);
+  let data;
+  try {
+    const res = await fetch(RECIPE_WORKER_URL + '?url=' + encodeURIComponent(url));
+    data = await res.json();
+    if (!res.ok) throw Object.assign(new Error(data.error), { code: data.error });
+  } catch (err) {
+    console.error(err);
+    hideBusy();
+    toast(!navigator.onLine ? 'Offline – Rezept-Links brauchen eine Internetverbindung.'
+      : err.code === 'norecipe' ? 'Auf dieser Seite wurde kein Rezept gefunden – versuche einen Screenshot.'
+      : 'Rezept konnte nicht geladen werden – versuche einen Screenshot.');
+    return;
+  }
+  hideBusy();
+  const items = parseIngredientList(data.ingredients || []);
+  if (!items.length) { openPaste((data.ingredients || []).join('\n'), 'Keine Zutaten erkannt. Du kannst den Text hier korrigieren.'); return; }
+  openRecipe({ id: null, name: data.name || title || '', url: data.url || url, yield: data.yield || '', ingredients: items });
+}
 
 /* Über „Teilen“ aus anderen Apps empfangen (Service Worker legt Bild/Text in den Cache „share-inbox“) */
 async function importShared() {
@@ -1151,8 +1177,11 @@ async function importShared() {
     await caches.delete('share-inbox');
     const title = String(meta.title || '').split(/\s[|–-]\s/)[0].replace(/\b(rezept|rezepte)\b/gi, '').trim();
     if (img) return recipeFromImage(img, title);
-    if (String(meta.text || '').replace(/https?:\S+/g, '').trim()) return recipeFromText(meta.text, title);
-    if (meta.url || meta.text) toast('Links kann die App noch nicht auslesen – teile einen Screenshot oder markierten Text.');
+    // markierter Text mit Zutaten hat Vorrang; sonst den geteilten Link auslesen
+    const text = String(meta.text || '').replace(/https?:\/\/\S+/g, '').trim();
+    const link = String(meta.url || '').trim() || (String(meta.text || '').match(/https?:\/\/\S+/) || [''])[0];
+    if (text && (parseRecipe(text).items.length >= 2 || !link)) return recipeFromText(meta.text, title);
+    if (link) return recipeFromUrl(link, title);
   } catch (err) { console.error(err); toast('Geteilter Inhalt konnte nicht gelesen werden.'); }
 }
 
@@ -1173,7 +1202,14 @@ let recipeDraft = null; // { id, rows: [{ name, amount, checked }] }
 const recipeTarget = () => db.lists.find(l => l.id === $('#rList').value) || null;
 
 function openRecipe(recipe) {
-  recipeDraft = { id: recipe.id, rows: recipe.ingredients.map(i => ({ name: i.name, amount: i.amount || '', checked: false })) };
+  recipeDraft = { id: recipe.id, url: recipe.url || '', yield: recipe.yield || '',
+    rows: recipe.ingredients.map(i => ({ name: i.name, amount: i.amount || '', checked: false })) };
+  const src = $('#rSource');
+  src.classList.toggle('hidden', !recipe.url);
+  if (recipe.url) {
+    src.href = recipe.url;
+    src.textContent = [new URL(recipe.url).hostname.replace(/^www\./, ''), recipe.yield].filter(Boolean).join(' · ') + ' ↗';
+  }
   $('#dlgRecipeTitle').textContent = recipe.id ? recipe.name : 'Rezept übernehmen';
   $('#rName').value = recipe.name || '';
   $('#rSave').checked = true;
@@ -1252,9 +1288,10 @@ $('#rDelete').addEventListener('click', () => {
   save(); $('#dlgRecipe').close(); recipeDraft = null; refresh(); toast('Rezept gelöscht');
 });
 
-function saveRecipe(id, name, rows) {
-  const data = { name, ingredients: rows.map(r => ({ name: r.name.trim(), amount: r.amount.trim() })), updatedAt: Date.now() };
-  let r = id && db.recipes.find(x => x.id === id);
+function saveRecipe(draft, name, rows) {
+  const data = { name, url: draft.url, yield: draft.yield, updatedAt: Date.now(),
+    ingredients: rows.map(r => ({ name: r.name.trim(), amount: r.amount.trim() })) };
+  let r = draft.id && db.recipes.find(x => x.id === draft.id);
   if (!r) {
     const same = db.recipes.find(x => lc(x.name) === lc(name));
     if (same && confirm('Es gibt schon ein Rezept „' + same.name + '“. Ersetzen?')) r = same;
@@ -1279,7 +1316,7 @@ $('#formRecipe').addEventListener('submit', e => {
   const name = $('#rName').value.trim();
   const keep = !!recipeDraft.id || $('#rSave').checked;
   if (keep && !name) { e.preventDefault(); $('#rName').focus(); toast('Bitte gib dem Rezept einen Namen'); return; }
-  if (keep) saveRecipe(recipeDraft.id, name, rows);
+  if (keep) saveRecipe(recipeDraft, name, rows);
   const list = recipeTarget();
   const picked = rows.filter(r => r.checked);
   if (list && picked.length) {

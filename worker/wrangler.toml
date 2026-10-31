@@ -1,0 +1,4 @@
+# Optional: Bereitstellen per Kommandozeile mit `npx wrangler deploy` (alternativ im Cloudflare-Dashboard, siehe README)
+name = "einkaufszettel-rezept"
+main = "rezept-worker.js"
+compatibility_date = "2024-09-23"

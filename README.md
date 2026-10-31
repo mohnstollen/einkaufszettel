@@ -45,8 +45,27 @@ läuft im Browser; beim ersten Mal werden ca. 5 MB geladen, danach funktioniert 
 Zutaten werden mit Menge angezeigt und, wo möglich, den Abschnitten der eigenen Listen zugeordnet.
 
 In der installierten App (Chrome, Android) erscheint „Einkaufszettel“ außerdem im **Teilen**-Menü anderer Apps:
-Screenshots oder markierter Rezepttext lassen sich direkt übergeben. Nach dem Update kann es einige Zeit dauern,
+Screenshots, markierter Rezepttext oder – mit eingerichtetem Worker, siehe unten – der Link zur Rezeptseite
+lassen sich direkt übergeben. Nach dem Update kann es einige Zeit dauern,
 bis Android den neuen Eintrag anzeigt – notfalls die App einmal neu installieren.
+
+### Rezept-Links (Cloudflare Worker, optional)
+Rezeptseiten beschreiben ihre Zutaten meist maschinenlesbar (schema.org/Recipe). Weil eine Web-App fremde
+Seiten nicht selbst abrufen darf (CORS), übernimmt das ein kleiner, kostenloser
+[Cloudflare Worker](https://developers.cloudflare.com/workers/) ([`worker/rezept-worker.js`](worker/rezept-worker.js)).
+Er gibt nur Titel, Portionen und Zutaten zurück und antwortet nur der eigenen App.
+
+1. Auf <https://dash.cloudflare.com> kostenlos registrieren.
+2. **Workers & Pages → Erstellen → Worker** („Hello World“), Name z. B. `einkaufszettel-rezept`, **Bereitstellen**.
+3. **Code bearbeiten**, den Inhalt durch [`worker/rezept-worker.js`](worker/rezept-worker.js) ersetzen und erneut
+   **Bereitstellen**. Wer die App nicht unter `mohnstollen.github.io` betreibt, passt `ALLOWED_ORIGINS` an.
+4. Die angezeigte Adresse (`https://einkaufszettel-rezept.<name>.workers.dev`) in [`config.js`](config.js) als
+   `RECIPE_WORKER_URL` eintragen und die Version in `sw.js` erhöhen.
+
+Alternativ per Kommandozeile im Ordner `worker/`: `npx wrangler deploy`.
+
+Danach lassen sich Rezepte per **Teilen → Einkaufszettel** direkt aus dem Browser übernehmen oder als Link unter
+**Rezepte → Text oder Link** einfügen. Der kostenlose Tarif erlaubt 100.000 Aufrufe pro Tag.
 
 ## Veröffentlichen mit GitHub Pages
 Im Repository unter **Settings → Pages** als Quelle „Deploy from a branch“, Branch `main`, Ordner `/ (root)`
