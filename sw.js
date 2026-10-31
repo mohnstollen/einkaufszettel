@@ -1,5 +1,5 @@
 /* Bei jeder Änderung an den Dateien die Version erhöhen – die App zeigt dann „Neue Version verfügbar“. */
-const CACHE = 'einkaufszettel-v15';
+const CACHE = 'einkaufszettel-v16';
 const INBOX = 'share-inbox'; // über „Teilen“ empfangene Rezepte (Bild/Text), von der App abgeholt
 const ASSETS = ['./','./index.html','./styles.css','./icons.js','./app.js','./recipe-parse.js','./config.js','./sync.js','./firebase-config.js','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 

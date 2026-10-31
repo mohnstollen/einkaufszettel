@@ -1,11 +1,12 @@
 /* Zutaten aus erkanntem oder eingefügtem Rezepttext lesen.
    parseRecipe(text) → { title, items: [{ name, amount }] }
    parseIngredientList(['200 g Mehl', …]) → items (für strukturierte Zutatenlisten von Rezeptseiten)
+   textFromOcr(tesseractData) → Text mit getrennten Spalten (für parseRecipe)
    Reine Funktionen ohne DOM – auch mit Node testbar. */
 
 const UNITS = [
   'g', 'gr', 'gramm', 'kg', 'mg', 'ml', 'mi', 'cl', 'dl', 'l', 'liter',
-  'el', 'tl', 'msp', 'prisen?', 'pck', 'pkt', 'päckchen', 'packung(?:en)?', 'pkg',
+  'el', 'tl', 'e[ßsb]s?[li1](?:öffel)?', 'tee[li1](?:öffel)?', 'msp', 'prisen?', 'pck', 'pkt', 'päckchen', 'packung(?:en)?', 'pkg',
   'dosen?', 'becher', 'bund', 'stück', 'stk', 'zehen?', 'scheiben?', 'tassen?', 'gläser', 'glas',
   'würfel', 'cm', 'handvoll', 'spritzer', 'schuss', 'tropfen', 'blatt', 'blätter', 'stangen?', 'stiele?',
   'zweige?', 'köpfe', 'kopf', 'knollen?', 'beutel', 'flaschen?', 'portionen?', 'rollen?', 'tüten?', 'pfund', 'platten?'
@@ -16,7 +17,7 @@ const UNIT = '(?:(?:' + UNITS + ')\\.?(?=\\s|$|,))';
 const LEAD_RE = new RegExp('^(?:ca\\.?\\s*)?(' + QTY + '(?:\\s*' + UNIT + ')?|' + UNIT + ')\\s*', 'i');
 const TRAIL_RE = new RegExp('\\s+((?:ca\\.?\\s*)?' + QTY + '\\s*' + UNIT + '?)$', 'i');
 const VAGUE_RE = /^(etwas|evtl\.?|eventuell|n\.\s?b\.?|nach belieben|nach geschmack|reichlich|wenig|einige|ein paar|eine[nrsm]?|ein|einige)\s+/i;
-const ADJ_RE = /^(kleine?[rns]?|große?[rns]?|mittelgroße?[rns]?|frische?[rns]?|reife?[rns]?|weiche?[rns]?|kalte?[rns]?|warme?[rns]?|getrocknete?[rns]?|gemahlene?[rns]?|geriebene?[rns]?|gehackte?[rns]?|zimmerwarme?[rns]?|tiefgekühlte?[rns]?|tk)\s+/i;
+const ADJ_RE = /^(\w*gemahlene?[rns]?|\w*gehackte?[rns]?|kleine?[rns]?|große?[rns]?|mittelgroße?[rns]?|frische?[rns]?|reife?[rns]?|weiche?[rns]?|kalte?[rns]?|warme?[rns]?|getrocknete?[rns]?|gemahlene?[rns]?|geriebene?[rns]?|gehackte?[rns]?|zimmerwarme?[rns]?|tiefgekühlte?[rns]?|tk)\s+/i;
 const STOP_RE = /^(z?ubereitung|anleitung|so geht'?s|so wird'?s gemacht|arbeitsschritte|schritt\s*1|nährwerte|zubereitungsschritte)\b/i;
 const SKIP_RE = /^(z?utaten\b|f?[üu]r\s+\d|\d+\s+(portionen|personen|stück)\b|portionen|personen|arbeitszeit|kochzeit|backzeit|ruhezeit|gesamtzeit|schwierigkeit|kalorien|zubereitungszeit|tipp\b|rezept\b|drucken|teilen|merken|einkaufsliste|(back|spring|kasten|auflauf|tarte)?form\s*:|ø)/i;
 // Zwischenüberschrift: „Für den Teig“, „Für die Füllung:“, „FÜR DIE SOSSE“ oder ganz in Großbuchstaben
@@ -43,6 +44,7 @@ function parseLine(line, strict = true) {
   // „Saft von 1 Zitrone“, „Abrieb einer Orange“ → Zutat Zitrone/Orange, Hinweis in der Menge
   const part = s.match(/^(saft|abrieb|schale|zesten?)\s+(?:von\s+)?(.+)$/i);
   if (part) s = part[2];
+  s = s.replace(/^(\d+)\s*[Qq]g?(?=\s)/, '$1 g'); // „g“ als „Qg“ gelesen
   let amount = '';
   const lead = s.match(LEAD_RE);
   if (lead) { amount = lead[1].trim(); s = s.slice(lead[0].length); }
@@ -53,6 +55,8 @@ function parseLine(line, strict = true) {
   amount = amount
     .replace(/^(\d*0)9g$/, '$1 g') // typischer OCR-Fehler: „50 g“ → „509g“
     .replace(/\bmi$/i, 'ml') // „ml“ als „mi“ gelesen
+    .replace(/\be[ßsb]s?[li1](?:öffel)?\.?$/i, 'EL') // „Eßl.“, „Esslöffel“, OCR: „EBl.“, „EßI.“
+    .replace(/\btee[li1](?:öffel)?\.?$/i, 'TL')
     .replace(/(\d)([a-zäöü])/i, '$1 $2'); // „2EL“ → „2 EL“
   // „2 Zehe/n“ wurde oben zu „Zehe“ – bei mehr als einem Stück wieder Mehrzahl
   amount = amount.replace(/^(\d+(?:[.,]\d+)?|\d+\s*[-–]\s*\d+)\s+(zehe|dose|platte|scheibe|stange|tasse|flasche|knolle|rolle|tüte|prise)$/i,
@@ -83,6 +87,34 @@ function mergeItems(list) {
 
 function parseIngredientList(lines) {
   return mergeItems(lines.flatMap(l => isHeading(String(l)) ? [] : parseLine(String(l), false)));
+}
+
+/* Tesseract liefert Zeilen mit Wortpositionen. Große Lücken innerhalb einer Zeile trennen Spalten:
+   Die erste Spalte ist die Zeile – ist sie nur eine Menge („300 g   Weizenmehl“), gehört die nächste dazu.
+   Weitere Spalten bleiben nur, wenn sie selbst wie eine Zutat mit Menge aussehen (zweispaltige Listen);
+   Bruchstücke einer angeschnittenen Nachbarspalte („Ke“, „fa“) fallen weg. */
+function textFromOcr(data) {
+  if (!data || !Array.isArray(data.lines) || !data.lines.length) return (data && data.text) || '';
+  const median = a => a.slice().sort((x, y) => x - y)[a.length >> 1];
+  const isAmountOnly = t => { const m = t.match(LEAD_RE); return !!m && !t.slice(m[0].length).trim(); };
+  const isIngredient = t => { const m = t.match(LEAD_RE); return !!m && /[a-zäöüß]{3}/i.test(t.slice(m[0].length)); };
+  const out = [];
+  for (const line of data.lines) {
+    const words = (line.words || []).filter(w => w.text && w.text.trim() && w.bbox).sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (!words.length) continue;
+    const h = median(words.map(w => w.bbox.y1 - w.bbox.y0)) || 20;
+    const segs = [[words[0]]];
+    for (let i = 1; i < words.length; i++) {
+      if (words[i].bbox.x0 - words[i - 1].bbox.x1 > 1.5 * h) segs.push([]);
+      segs[segs.length - 1].push(words[i]);
+    }
+    const texts = segs.map(s => s.map(w => w.text).join(' '));
+    let first = texts[0], i = 1;
+    while (i < texts.length && isAmountOnly(first)) first += ' ' + texts[i++];
+    out.push(first);
+    for (; i < texts.length; i++) if (isIngredient(texts[i])) out.push(texts[i]);
+  }
+  return out.join('\n');
 }
 
 /* Vergleichsschlüssel: Groß/klein, Umlaute, Klammern, einfache Plural-Endungen egal */
@@ -122,4 +154,4 @@ function parseRecipe(text) {
   return { title: head > 0 ? title : '', items: mergeItems(block.flatMap(b => b.items)) };
 }
 
-if (typeof module !== 'undefined') module.exports = { parseRecipe, parseLine, parseIngredientList, ingredientKey };
+if (typeof module !== 'undefined') module.exports = { parseRecipe, parseLine, parseIngredientList, textFromOcr, ingredientKey };
