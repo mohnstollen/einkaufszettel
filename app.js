@@ -1095,7 +1095,7 @@ async function recognizeText(file) {
     });
     const { data } = await worker.recognize(await prepareImage(file));
     await worker.terminate();
-    return data.text;
+    return textFromOcr(data);
   } finally { hideBusy(); }
 }
 function showBusy(text, progress) {
