@@ -1,5 +1,5 @@
 /* Bei jeder Änderung an den Dateien die Version erhöhen – die App zeigt dann „Neue Version verfügbar“. */
-const CACHE = 'einkaufszettel-v8';
+const CACHE = 'einkaufszettel-v9';
 const ASSETS = ['./','./index.html','./styles.css','./icons.js','./app.js','./sync.js','./firebase-config.js','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 
 self.addEventListener('install', e => {
