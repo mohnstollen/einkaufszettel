@@ -3,7 +3,7 @@
    Reine Funktionen ohne DOM – auch mit Node testbar. */
 
 const UNITS = [
-  'g', 'gr', 'gramm', 'kg', 'mg', 'ml', 'cl', 'dl', 'l', 'liter',
+  'g', 'gr', 'gramm', 'kg', 'mg', 'ml', 'mi', 'cl', 'dl', 'l', 'liter',
   'el', 'tl', 'msp', 'prisen?', 'pck', 'pkt', 'päckchen', 'packung(?:en)?', 'pkg',
   'dosen?', 'becher', 'bund', 'stück', 'stk', 'zehen?', 'scheiben?', 'tassen?', 'gläser', 'glas',
   'würfel', 'cm', 'handvoll', 'spritzer', 'schuss', 'tropfen', 'blatt', 'blätter', 'stangen?', 'stiele?',
@@ -17,7 +17,10 @@ const TRAIL_RE = new RegExp('\\s+((?:ca\\.?\\s*)?' + QTY + '\\s*' + UNIT + '?)$'
 const VAGUE_RE = /^(etwas|evtl\.?|eventuell|n\.\s?b\.?|nach belieben|nach geschmack|reichlich|wenig|einige|ein paar|eine?n?|einige)\s+/i;
 const ADJ_RE = /^(kleine?[rns]?|große?[rns]?|mittelgroße?[rns]?|frische?[rns]?|reife?[rns]?|weiche?[rns]?|kalte?[rns]?|warme?[rns]?|getrocknete?[rns]?|gemahlene?[rns]?|geriebene?[rns]?|gehackte?[rns]?|zimmerwarme?[rns]?|tiefgekühlte?[rns]?|tk)\s+/i;
 const STOP_RE = /^(z?ubereitung|anleitung|so geht'?s|so wird'?s gemacht|arbeitsschritte|schritt\s*1|nährwerte|zubereitungsschritte)\b/i;
-const SKIP_RE = /^(z?utaten\b|f?[üu]r\s+\d|\d+\s+(portionen|personen|stück)\b|portionen|personen|arbeitszeit|kochzeit|backzeit|ruhezeit|gesamtzeit|schwierigkeit|kalorien|zubereitungszeit|tipp\b|rezept\b|drucken|teilen|merken|einkaufsliste)/i;
+const SKIP_RE = /^(z?utaten\b|f?[üu]r\s+\d|\d+\s+(portionen|personen|stück)\b|portionen|personen|arbeitszeit|kochzeit|backzeit|ruhezeit|gesamtzeit|schwierigkeit|kalorien|zubereitungszeit|tipp\b|rezept\b|drucken|teilen|merken|einkaufsliste|(back|spring|kasten|auflauf|tarte)?form\s*:|ø)/i;
+// Zwischenüberschrift: „Für den Teig“, „Für die Füllung:“, „FÜR DIE SOSSE“ oder ganz in Großbuchstaben
+const isHeading = l => /^f[üu]r\s+(den|die|das)\s/i.test(l) || /:$/.test(l) ||
+  (l.length >= 4 && /[A-ZÄÖÜ]{3}/.test(l) && l === l.toUpperCase());
 
 function cleanName(s) {
   s = s.replace(/^[\s\-–•*·▢☐□○◯✓✔]+/, '');
@@ -42,6 +45,7 @@ function parseLine(line) {
   }
   amount = amount
     .replace(/^(\d*0)9g$/, '$1 g') // typischer OCR-Fehler: „50 g“ → „509g“
+    .replace(/\bmi$/i, 'ml') // „ml“ als „mi“ gelesen
     .replace(/(\d)([a-zäöü])/i, '$1 $2'); // „2EL“ → „2 EL“
   if (s.split(' ').length > 6) return []; // eher ein Satz aus der Anleitung
   // „Salz und Pfeffer“, „Salz, Pfeffer“ ohne Menge → zwei Zutaten
@@ -67,17 +71,34 @@ function parseRecipe(text) {
   const head = lines.findIndex(l => /^z?utaten\b/i.test(l)); // OCR verliert gern den ersten Buchstaben
   const before = head > 0 ? lines.slice(0, head) : lines.slice(0, 3);
   const title = (before.find(l => /[a-zäöü]{3}/i.test(l) && l.length <= 50 && !LEAD_RE.test(l) && !SKIP_RE.test(l)) || '').trim();
-  const items = [];
-  const seen = new Set();
-  for (const line of head >= 0 ? lines.slice(head + 1) : lines) {
-    if (STOP_RE.test(line) && items.length) break;
-    if (SKIP_RE.test(line)) continue;
-    parseLine(line).forEach(i => {
-      const k = ingredientKey(i.name);
-      if (!k || seen.has(k)) return;
-      seen.add(k); items.push(i);
-    });
+
+  const body = (head >= 0 ? lines.slice(head + 1) : lines).map(line => ({
+    line, items: SKIP_RE.test(line) || isHeading(line) ? [] : parseLine(line)
+  }));
+  // Zutatenblock eingrenzen: von der ersten bis zur letzten Zeile mit Mengenangabe (Ende spätestens bei
+  // „Zubereitung“), danach noch direkt folgende kurze Zeilen wie „etwas Puderzucker zum Bestreuen“.
+  // So fallen Menüs, Buttons und Werbetexte aus Screenshots weg.
+  const hasAmount = b => b.items.some(i => i.amount);
+  let first = body.findIndex(hasAmount), last = first;
+  if (first >= 0) {
+    for (let i = first; i < body.length; i++) {
+      if (STOP_RE.test(body[i].line)) break;
+      if (hasAmount(body[i])) last = i;
+    }
+    while (last + 1 < body.length && body[last + 1].items.length && !STOP_RE.test(body[last + 1].line) &&
+      (VAGUE_RE.test(body[last + 1].line) || body[last + 1].line.split(' ').length <= 3)) last++;
   }
+  const block = first >= 0 ? body.slice(first, last + 1) : body.slice(0, (body.findIndex(b => STOP_RE.test(b.line)) + 1 || body.length + 1) - 1);
+
+  const items = [];
+  const byKey = new Map();
+  block.forEach(b => b.items.forEach(i => {
+    const k = ingredientKey(i.name);
+    if (!k) return;
+    const prev = byKey.get(k);
+    if (prev) { if (i.amount) prev.amount = prev.amount ? prev.amount + ' + ' + i.amount : i.amount; return; } // z. B. Zucker für Teig und Füllung
+    byKey.set(k, i); items.push(i);
+  }));
   return { title: head > 0 ? title : '', items };
 }
 

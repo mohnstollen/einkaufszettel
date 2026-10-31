@@ -1065,17 +1065,19 @@ async function prepareImage(file) {
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
   ctx.drawImage(img, pad, pad, w, h);
-  // Graustufen + Kontrast strecken (hilft bei Fotos mit schwachem Licht oder grauem Papier)
+  // Nur bei kontrastarmen Bildern (Fotos mit schwachem Licht, graues Papier): Graustufen + Kontrast strecken.
+  // Saubere Screenshots bleiben unverändert – dort verschlechtert das die Erkennung eher.
   const px = ctx.getImageData(0, 0, c.width, c.height), d = px.data;
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < d.length; i += 4) hist[d[i] = d[i + 1] = d[i + 2] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0]++;
-  const n = d.length / 4;
+  const gray = new Uint8ClampedArray(d.length / 4), hist = new Uint32Array(256);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) hist[gray[j] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000]++;
   let lo = 0, hi = 255, acc = 0;
-  while (lo < 255 && (acc += hist[lo]) < n * 0.02) lo++;
+  while (lo < 255 && (acc += hist[lo]) < gray.length * 0.02) lo++;
   acc = 0;
-  while (hi > 0 && (acc += hist[hi]) < n * 0.3) hi--; // heller Hintergrund dominiert
-  if (hi - lo > 20) for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, (d[i] - lo) * 255 / (hi - lo)));
-  ctx.putImageData(px, 0, 0);
+  while (hi > 0 && (acc += hist[hi]) < gray.length * 0.3) hi--; // heller Hintergrund dominiert
+  if (hi - lo > 20 && hi - lo < 200) {
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) d[i] = d[i + 1] = d[i + 2] = (gray[j] - lo) * 255 / (hi - lo);
+    ctx.putImageData(px, 0, 0);
+  }
   return c;
 }
 async function recognizeText(file) {
