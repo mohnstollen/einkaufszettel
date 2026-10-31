@@ -170,3 +170,10 @@ dialog label.check input{width:auto;margin:0}
 .share-actions{display:flex;gap:8px;margin-bottom:12px}
 .share-actions .btn{flex:1}
 dialog menu .danger{color:var(--danger);margin-right:auto}
+.suggest{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:12px;overflow:hidden}
+.suggest-head{font-size:13px;color:var(--muted);font-weight:600;padding:9px 14px 4px}
+.suggest button{display:flex;align-items:center;gap:8px;width:100%;border:0;border-top:1px solid var(--line);background:none;
+  color:var(--fg);font:inherit;text-align:left;padding:10px 14px;cursor:pointer}
+.suggest button .ic{color:var(--accent);font-size:18px}
+.sg-name{font-weight:600;flex:none}
+.sg-from{font-size:13px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}

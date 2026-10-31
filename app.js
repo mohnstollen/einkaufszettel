@@ -27,17 +27,23 @@ const todayISO = () => {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-function newList(name, template) {
+/* Vorlage „Lebensmittel“: [{ name: Abschnitt, products: [Produktnamen] }] – vom Nutzer erweiterbar */
+const defaultTemplate = () => DEFAULTS.map(([name, products]) => ({ name, products: [...products] }));
+
+function newList(name, template = []) {
   return {
     id: uid(), name,
-    sections: template !== 'food' ? [] : DEFAULTS.map(([sec, products]) => ({
-      id: uid(), name: sec, collapsed: false,
-      products: products.map(n => ({ id: uid(), name: n, needed: false, done: false, note: '' }))
+    sections: template.map(t => ({
+      id: uid(), name: t.name, collapsed: false,
+      products: t.products.map(n => ({ id: uid(), name: n, needed: false, done: false, note: '' }))
     })),
     trip: null, lastStore: '', onlyNeeded: false, archive: [], shared: null, seenAt: 0
   };
 }
-function defaultDb() { return { lists: [newList('Lebensmittel', 'food')], since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '' }; }
+function defaultDb() {
+  return { lists: [newList('Lebensmittel', defaultTemplate())], template: defaultTemplate(),
+    since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '' };
+}
 
 /* ---------- Laden / Migration / Prüfung ---------- */
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -87,7 +93,11 @@ function toDb(s) {
   const seen = new Set();
   lists.forEach(l => { if (seen.has(l.id)) l.id = uid(); seen.add(l.id); });
   return { lists, since: num(s.since) || Date.now(), lastBackup: num(s.lastBackup), snoozeUntil: num(s.snoozeUntil),
-    userName: str(s.userName) };
+    userName: str(s.userName),
+    template: Array.isArray(s.template)
+      ? s.template.filter(isObj).map(t => ({ name: str(t.name).trim() || 'Allgemein',
+          products: arr(t.products).filter(n => str(n).trim()).map(n => n.trim()) }))
+      : defaultTemplate() };
 }
 function load() {
   try {
@@ -248,7 +258,7 @@ $('#formList').addEventListener('submit', e => {
   const name = $('#lName').value.trim();
   if (!name) { e.preventDefault(); return; }
   if (editingList) { editingList.name = name; save(); refresh(); toast('Gespeichert'); }
-  else { const list = newList(name, $('#lTemplate').value); db.lists.push(list); save(); openList(list.id); }
+  else { const list = newList(name, $('#lTemplate').value === 'food' ? db.template : []); db.lists.push(list); save(); openList(list.id); }
   editingList = null;
 });
 function delList(list) {
@@ -366,21 +376,72 @@ function render() {
 
   if (!listEl.children.length) listEl.innerHTML = '<div class="empty">' + (state.sections.length || q
     ? 'Nichts gefunden.' : 'Diese Liste ist noch leer. Tippe auf +, um ein Produkt hinzuzufügen.') + '</div>';
-  if (q) listEl.prepend(quickAddButton($('#search').value.trim()));
+  if (q) {
+    const matches = catalogMatches(q);
+    const exact = matches.find(m => lc(m.name) === q);
+    const rest = matches.filter(m => m !== exact);
+    if (rest.length) {
+      const none = listEl.querySelector(':scope > .empty');
+      if (none) none.remove();
+      listEl.prepend(suggestionBox(rest));
+    }
+    listEl.prepend(quickAddButton($('#search').value.trim(), exact));
+  }
   $('#counter').textContent = doneTotal + ' / ' + needTotal;
   $('#btnOnlyNeeded').classList.toggle('on', state.onlyNeeded);
 }
 
-/* Suchtreffer ohne exakten Namen → anlegen; vorhanden, aber ausgeblendet → markieren */
-function quickAddButton(name) {
+const lc = s => s.toLowerCase();
+
+/* Produkte aus anderen Listen und der Vorlage, die zur Suche passen und hier noch fehlen */
+function catalogMatches(q) {
+  const have = new Set();
+  state.sections.forEach(s => s.products.forEach(p => have.add(lc(p.name))));
+  const out = new Map();
+  const add = (name, section, from) => {
+    const k = lc(name);
+    if (k.includes(q) && !have.has(k) && !out.has(k)) out.set(k, { name, section, from });
+  };
+  db.lists.forEach(l => { if (l !== state) l.sections.forEach(s => s.products.forEach(p => add(p.name, s.name, l.name))); });
+  db.template.forEach(t => t.products.forEach(n => add(n, t.name, 'Vorlage')));
+  const starts = m => lc(m.name).startsWith(q) ? 0 : 1;
+  return [...out.values()].sort((a, b) => starts(a) - starts(b) || a.name.localeCompare(b.name, 'de')).slice(0, 6);
+}
+/* Produkt in die aktuelle Liste übernehmen – in den gleichnamigen Abschnitt (wird bei Bedarf angelegt) */
+function adopt(m) {
+  let sec = state.sections.find(s => lc(s.name) === lc(m.section));
+  if (!sec) { sec = { id: uid(), name: m.section, collapsed: false, products: [] }; state.sections.push(sec); }
+  addProductTo(sec, m.name, '', true);
+  $('#search').value = ''; save(); render(); toast('„' + m.name + '“ übernommen und markiert');
+}
+function suggestionBox(matches) {
+  const box = document.createElement('div');
+  box.className = 'suggest';
+  box.innerHTML = '<div class="suggest-head">Aus anderen Listen</div>';
+  matches.forEach(m => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = ICON.plus + '<span class="sg-name"></span><span class="sg-from"></span>';
+    b.querySelector('.sg-name').textContent = m.name;
+    b.querySelector('.sg-from').textContent = m.section + ' · ' + m.from;
+    b.addEventListener('click', () => adopt(m));
+    box.appendChild(b);
+  });
+  return box;
+}
+
+/* Suchtreffer ohne exakten Namen → anlegen (oder aus anderer Liste übernehmen); vorhanden, aber ausgeblendet → markieren */
+function quickAddButton(name, exact) {
   let found = null;
   state.sections.forEach(s => s.products.forEach(p => { if (p.name.toLowerCase() === name.toLowerCase()) found = p; }));
   if (found && (found.needed || !state.onlyNeeded)) return '';
   const b = document.createElement('button');
   b.type = 'button'; b.className = 'quick-add'; b.id = 'quickAdd';
   b.innerHTML = ICON.plus + '<span></span>';
-  b.querySelector('span').textContent = found ? '„' + found.name + '“ auf die Liste setzen' : '„' + name + '“ hinzufügen';
+  b.querySelector('span').textContent = found ? '„' + found.name + '“ auf die Liste setzen'
+    : exact ? '„' + exact.name + '“ übernehmen (' + exact.section + ')' : '„' + name + '“ hinzufügen';
   b.addEventListener('click', () => {
+    if (!found && exact) return adopt(exact);
     if (!found) return openProduct(null, null, name);
     markNeeded(found);
     $('#search').value = ''; save(); render(); toast('Markiert');
@@ -659,10 +720,22 @@ function openProduct(sec, product, presetName) {
   $('#pName').value = product ? product.name : (presetName || '');
   $('#pNote').value = product ? (product.note || '') : '';
   $('#pCopy').checked = false;
+  tplInitial = !!product && inTemplate(product.name);
+  $('#pTemplate').checked = tplInitial;
   toggleCopy();
   $('#dlgProduct').showModal();
   setTimeout(() => $('#pName').focus(), 50);
 }
+let tplInitial = false; // stand das Produkt beim Öffnen des Dialogs schon in der Vorlage?
+const inTemplate = name => db.template.some(t => t.products.some(n => lc(n) === lc(name)));
+function removeFromTemplate(name) { db.template.forEach(t => { t.products = t.products.filter(n => lc(n) !== lc(name)); }); }
+function addToTemplate(name, sectionName) {
+  if (inTemplate(name)) return;
+  let t = db.template.find(x => lc(x.name) === lc(sectionName));
+  if (!t) { t = { name: sectionName, products: [] }; db.template.push(t); }
+  t.products.push(name);
+}
+
 function targetList() { return db.lists.find(l => l.id === $('#pSection').value.split('|')[0]) || state; }
 function toggleCopy() { $('#pCopyWrap').classList.toggle('hidden', !editing || targetList() === state); }
 $('#pSection').addEventListener('change', toggleCopy);
@@ -692,6 +765,11 @@ $('#formProduct').addEventListener('submit', e => {
   let target = list.sections.find(s => s.id === secId);
   if (!target) { target = { id: uid(), name: 'Allgemein', collapsed: false, products: [] }; list.sections.push(target); }
   const where = list === state ? '' : ' in „' + list.name + '“';
+  // Vorlage pflegen: hinzufügen, wenn angehakt; entfernen nur, wenn das Häkchen bewusst gelöst wurde
+  const oldName = editing ? (state.sections.find(s => s.id === editing.sectionId).products.find(x => x.id === editing.productId) || {}).name : '';
+  if (oldName && lc(oldName) !== lc(name) && inTemplate(oldName)) { removeFromTemplate(oldName); addToTemplate(name, target.name); }
+  if ($('#pTemplate').checked) addToTemplate(name, target.name);
+  else if (tplInitial) removeFromTemplate(name);
 
   if (editing) {
     const src = state.sections.find(s => s.id === editing.sectionId);
@@ -830,7 +908,8 @@ $('#fileInput').addEventListener('change', async e => {
     if (Array.isArray(s.lists)) {
       if (confirm('Alle Listen durch das Backup ersetzen (' + data.lists.length + ' Listen)?')) {
         if (sync) db.lists.forEach(l => sync.unwatch(l));
-        db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil, userName: db.userName };
+        db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil, userName: db.userName,
+          template: Array.isArray(s.template) ? data.template : db.template };
         save(); renderHome(); toast('Backup geladen');
         if (db.lists.some(l => l.shared)) loadSync().then(m => m && db.lists.forEach(l => l.shared && m.watch(l)));
       }
@@ -917,7 +996,7 @@ async function joinShared(sid) {
   if (!await askName()) return location.replace('#');
   const m = await loadSync();
   if (!m) return location.replace('#');
-  const list = newList('Geteilte Liste', 'empty');
+  const list = newList('Geteilte Liste');
   list.shared = { id: sid };
   list.seenAt = 0;
   db.lists.push(list);
