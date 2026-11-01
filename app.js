@@ -1152,7 +1152,7 @@ async function recipeFromImage(file, title) {
       hideBusy();
       if (err.code === 'aborted') return;
       console.error(err);
-      reason = err.message.replace(/[.–].*$/, '').trim() || 'Fehler bei der Erkennung';
+      reason = (err.message.replace(/[.–].*$/, '').trim() || 'Fehler bei der Erkennung') + (err.kennung ? ' (' + err.kennung + ')' : '');
     }
   }
   let text;
@@ -1393,7 +1393,7 @@ $('#offerFile').addEventListener('change', async e => {
       kontext: { abschnitte: sectionNames(scanTarget()) },
       onStatus: s => busyStatus('Angebote werden erkannt…', s)
     }));
-  } catch (err) { hideBusy(); console.error(err); toast(err.message); return; }
+  } catch (err) { hideBusy(); console.error(err, err.detail); toast(err.message + (err.kennung ? ' (' + err.kennung + ')' : ''), 6000); return; }
   hideBusy();
   const rows = (ergebnis.angebote || []).filter(a => a && txt(a.name)).map(a => ({
     name: txt(a.name), produkt: txt(a.produkt), menge: txt(a.menge), preis: txt(a.preis),
@@ -1526,9 +1526,9 @@ function showUpdate(worker) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 2000) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2000);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), ms);
 }
 
 applyIcons();
