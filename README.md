@@ -6,7 +6,7 @@ PWA für Einkaufszettel
 - Pro Liste: Supermarkt und Datum, Archiv vergangener Einkäufe und Statistik
 - Listen und Abschnitte frei sortierbar; Produkte lassen sich in andere Listen verschieben oder kopieren
 - Suche mit Schnell-Hinzufügen (Enter legt einen nicht gefundenen Begriff als Produkt an)
-- Rezepte scannen (Foto oder Screenshot, Texterkennung direkt auf dem Gerät) oder als Text einfügen;
+- Rezepte und Prospekte scannen (Gemini über den Scan-Dienst, ohne Internet Texterkennung auf dem Gerät), Rezept-Links;
   fehlende Zutaten per Fingertipp auf eine Liste übernehmen, Rezepte merken und über die Suche wiederfinden
 - Listen lassen sich per Einladungslink mit anderen teilen und werden live abgeglichen (siehe unten)
 - Private Listen bleiben lokal im Browser; Backup/Wiederherstellung als JSON über das Menü der Startseite,
@@ -39,33 +39,22 @@ Der Punkt am Teilen-Symbol oben zeigt den Status: grün = aktuell, gelb = wird g
 Wer den Link kennt, kann die Liste lesen und bearbeiten. „Teilen beenden“ löst die Liste nur auf dem
 eigenen Gerät (sie bleibt als private Kopie erhalten).
 
-## Rezepte
-**Menü → Rezept scannen** öffnet Kamera oder Galerie. Die Texterkennung ([Tesseract.js](https://tesseract.projectnaptha.com/))
-läuft im Browser; beim ersten Mal werden ca. 5 MB geladen, danach funktioniert sie auch offline. Die erkannten
-Zutaten werden mit Menge angezeigt und, wo möglich, den Abschnitten der eigenen Listen zugeordnet.
+## Rezepte und Prospekte
+- **Menü → Rezept scannen:** Foto oder Screenshot eines Rezepts. Die Zutaten erkennt Gemini über den
+  [Scan-Dienst](https://github.com/mohnstollen/scan-dienst) – samt Menge und Vorschlag für den Abschnitt.
+  Ohne Internet (oder wenn der Dienst nicht antwortet) übernimmt die Texterkennung auf dem Gerät
+  ([Tesseract.js](https://tesseract.projectnaptha.com/), beim ersten Mal ca. 5 MB) – mit Hinweis, das Ergebnis zu prüfen.
+- **Menü → Prospekt scannen:** Foto einer Prospektseite; Angebote antippen und übernehmen. Auf dem Zettel steht der
+  allgemeine Begriff („Milch“), in der Notiz Laden, Preis und Produkt. Nur mit Internet.
+- **Rezept-Links:** unter **Rezepte → Text oder Link** einfügen oder per Teilen übergeben. Der Scan-Dienst liest die
+  maschinenlesbare Zutatenliste der Seite (schema.org/Recipe) aus.
 
 In der installierten App (Chrome, Android) erscheint „Einkaufszettel“ außerdem im **Teilen**-Menü anderer Apps:
-Screenshots, markierter Rezepttext oder – mit eingerichtetem Worker, siehe unten – der Link zur Rezeptseite
-lassen sich direkt übergeben. Nach dem Update kann es einige Zeit dauern,
-bis Android den neuen Eintrag anzeigt – notfalls die App einmal neu installieren.
+Screenshots, markierter Rezepttext oder der Link zur Rezeptseite lassen sich direkt übergeben. Nach dem Update kann
+es einige Zeit dauern, bis Android den neuen Eintrag anzeigt – notfalls die App einmal neu installieren.
 
-### Rezept-Links (Cloudflare Worker, optional)
-Rezeptseiten beschreiben ihre Zutaten meist maschinenlesbar (schema.org/Recipe). Weil eine Web-App fremde
-Seiten nicht selbst abrufen darf (CORS), übernimmt das ein kleiner, kostenloser
-[Cloudflare Worker](https://developers.cloudflare.com/workers/) ([`worker/rezept-worker.js`](worker/rezept-worker.js)).
-Er gibt nur Titel, Portionen und Zutaten zurück und antwortet nur der eigenen App.
-
-1. Auf <https://dash.cloudflare.com> kostenlos registrieren.
-2. **Workers & Pages → Erstellen → Worker** („Hello World“), Name z. B. `einkaufszettel-rezept`, **Bereitstellen**.
-3. **Code bearbeiten**, den Inhalt durch [`worker/rezept-worker.js`](worker/rezept-worker.js) ersetzen und erneut
-   **Bereitstellen**. Wer die App nicht unter `mohnstollen.github.io` betreibt, passt `ALLOWED_ORIGINS` an.
-4. Die angezeigte Adresse (`https://einkaufszettel-rezept.<name>.workers.dev`) in [`config.js`](config.js) als
-   `RECIPE_WORKER_URL` eintragen und die Version in `sw.js` erhöhen.
-
-Alternativ per Kommandozeile im Ordner `worker/`: `npx wrangler deploy`.
-
-Danach lassen sich Rezepte per **Teilen → Einkaufszettel** direkt aus dem Browser übernehmen oder als Link unter
-**Rezepte → Text oder Link** einfügen. Der kostenlose Tarif erlaubt 100.000 Aufrufe pro Tag.
+Die Adresse des Scan-Dienstes steht in [`config.js`](config.js) (`SCAN_SERVICE_URL`); `scan-client.js` ist eine
+Kopie aus dem Scan-Dienst-Repo. Einrichtung des Dienstes siehe dort.
 
 ## Veröffentlichen mit GitHub Pages
 Im Repository unter **Settings → Pages** als Quelle „Deploy from a branch“, Branch `main`, Ordner `/ (root)`

@@ -101,7 +101,7 @@ function toDb(s) {
     recipes: arr(s.recipes).filter(r => isObj(r) && str(r.name).trim()).map(r => ({
       id: str(r.id) || uid(), name: r.name.trim(), updatedAt: num(r.updatedAt), url: str(r.url), yield: str(r.yield),
       ingredients: arr(r.ingredients).filter(i => isObj(i) && str(i.name).trim())
-        .map(i => ({ name: i.name.trim(), amount: str(i.amount) }))
+        .map(i => ({ name: i.name.trim(), amount: str(i.amount), section: str(i.section) }))
     })) };
 }
 function load() {
@@ -867,7 +867,7 @@ $('#menu').addEventListener('click', e => {
      renameList: () => openListDialog(state),
      share: () => shareList(state),
      orderSections: () => openOrder('Abschnitte sortieren', () => state.sections),
-     recipes: openRecipes, scan: scanRecipe,
+     recipes: openRecipes, scan: scanRecipe, offers: scanOffers,
      archive: () => { archiveTab = 'list'; openArchive(); },
      stats: () => { archiveTab = 'stats'; openArchive(); },
      clearMarks, export: exportText })[btn.dataset.act]();
@@ -1117,26 +1117,63 @@ $('#recipeFile').addEventListener('change', e => {
   e.target.value = '';
   if (f) recipeFromImage(f);
 });
+/* Scan-Dienst (Gemini, siehe config.js) – wird erst bei Bedarf geladen */
+let scannerLoading = null;
+function getScanner() {
+  if (!SCAN_SERVICE_URL) return Promise.resolve(null);
+  return scannerLoading || (scannerLoading = import('./scan-client.js')
+    .then(m => m.createScanner({ endpoint: SCAN_SERVICE_URL }))
+    .catch(err => { console.error(err); scannerLoading = null; return null; }));
+}
+const scanTarget = () => state || db.lists.find(l => l.id === lastListId) || db.lists[0] || null;
+/* Abschnittsnamen für Gemini: die der Zielliste plus die der Vorlage */
+const sectionNames = list => [...new Set([...(list ? list.sections.map(s => s.name) : []), ...db.template.map(t => t.name)])];
+const busyStatus = (text, s) => showBusy(s === 'bild' ? 'Bild wird vorbereitet…' : text, s === 'bild' ? 0.2 : 0.6);
+const txt = v => typeof v === 'string' ? v.trim() : '';
+
+/* Rezeptfoto: zuerst Gemini (versteht, was Zutaten sind), ohne Internet oder bei Fehlern die Texterkennung auf dem Gerät */
 async function recipeFromImage(file, title) {
+  let reason = 'Ohne Internet erkannt';
+  const scanner = navigator.onLine ? await getScanner() : null;
+  if (scanner) {
+    try {
+      showBusy('Rezept wird erkannt…', 0.2);
+      const { ergebnis } = await scanner.scan('rezept', file, {
+        kontext: { abschnitte: sectionNames(scanTarget()) },
+        onStatus: s => busyStatus('Rezept wird erkannt…', s)
+      });
+      hideBusy();
+      const items = mergeItems((ergebnis.zutaten || []).filter(z => z && txt(z.name))
+        .map(z => ({ name: txt(z.name), amount: txt(z.menge), section: txt(z.abschnitt) })));
+      if (!items.length) { toast('Auf dem Bild wurde kein Rezept erkannt.'); return; }
+      openRecipe({ id: null, name: txt(ergebnis.titel) || title || '', yield: txt(ergebnis.portionen), ingredients: items });
+      return;
+    } catch (err) {
+      hideBusy();
+      if (err.code === 'aborted') return;
+      console.error(err);
+      reason = err.message.replace(/[.–].*$/, '').trim() || 'Fehler bei der Erkennung';
+    }
+  }
   let text;
   try { text = await recognizeText(file); }
   catch (err) { console.error(err); toast('Texterkennung fehlgeschlagen – beim ersten Mal ist Internet nötig.'); return; }
-  recipeFromText(text, title);
+  recipeFromText(text, title, reason + ' – einfache Texterkennung, bitte prüfen.');
 }
-function recipeFromText(text, title) {
+function recipeFromText(text, title, notice) {
   const r = parseRecipe(text);
   if (!r.items.length) {
     // nichts erkannt → Text zum Nachbessern anzeigen
     openPaste(text, 'Keine Zutaten erkannt. Du kannst den Text hier korrigieren oder ergänzen.');
     return;
   }
-  openRecipe({ id: null, name: r.title || title || '', ingredients: r.items });
+  openRecipe({ id: null, name: r.title || title || '', ingredients: r.items, notice });
 }
 
 /* Text einfügen (z. B. aus Google Lens oder von einer Webseite kopiert) */
 function openPaste(text, hint) {
   $('#pasteText').value = text || '';
-  $('#pasteHint').textContent = hint || (RECIPE_WORKER_URL
+  $('#pasteHint').textContent = hint || (SCAN_SERVICE_URL
     ? 'Füge den Link zu einem Rezept ein oder die Zutatenliste – eine Zutat pro Zeile, z. B. „200 g Mehl“.'
     : 'Füge die Zutatenliste ein – eine Zutat pro Zeile, z. B. „200 g Mehl“.');
   $('#dlgPaste').showModal();
@@ -1150,21 +1187,17 @@ $('#formPaste').addEventListener('submit', e => {
   setTimeout(() => link ? recipeFromUrl(link[0]) : recipeFromText(text), 0);
 });
 
-/* Rezept-Link über den Cloudflare Worker auslesen (schema.org/Recipe der Seite) */
+/* Rezept-Link über den Scan-Dienst auslesen (schema.org/Recipe der Seite) */
 async function recipeFromUrl(url, title) {
-  if (!RECIPE_WORKER_URL) { toast('Rezept-Links sind noch nicht eingerichtet – teile einen Screenshot oder markierten Text.'); return; }
+  const scanner = await getScanner();
+  if (!scanner) { toast('Rezept-Links sind nicht eingerichtet – teile einen Screenshot oder markierten Text.'); return; }
   showBusy('Rezept wird geladen…', 0.4);
   let data;
-  try {
-    const res = await fetch(RECIPE_WORKER_URL + '?url=' + encodeURIComponent(url));
-    data = await res.json();
-    if (!res.ok) throw Object.assign(new Error(data.error), { code: data.error });
-  } catch (err) {
+  try { data = await scanner.rezeptLink(url); }
+  catch (err) {
     console.error(err);
     hideBusy();
-    toast(!navigator.onLine ? 'Offline – Rezept-Links brauchen eine Internetverbindung.'
-      : err.code === 'norecipe' ? 'Auf dieser Seite wurde kein Rezept gefunden – versuche einen Screenshot.'
-      : 'Rezept konnte nicht geladen werden – versuche einen Screenshot.');
+    toast(err.message + ' Versuche einen Screenshot.');
     return;
   }
   hideBusy();
@@ -1208,7 +1241,9 @@ const recipeTarget = () => db.lists.find(l => l.id === $('#rList').value) || nul
 
 function openRecipe(recipe) {
   recipeDraft = { id: recipe.id, url: recipe.url || '', yield: recipe.yield || '',
-    rows: recipe.ingredients.map(i => ({ name: i.name, amount: i.amount || '', checked: false })) };
+    rows: recipe.ingredients.map(i => ({ name: i.name, amount: i.amount || '', section: i.section || '', checked: false })) };
+  $('#rNotice').textContent = recipe.notice || '';
+  $('#rNotice').classList.toggle('hidden', !recipe.notice);
   const src = $('#rSource');
   src.classList.toggle('hidden', !recipe.url);
   if (recipe.url) {
@@ -1223,7 +1258,7 @@ function openRecipe(recipe) {
   const sel = $('#rList');
   sel.innerHTML = '';
   db.lists.forEach(l => { const o = document.createElement('option'); o.value = l.id; o.textContent = l.name; sel.appendChild(o); });
-  const target = state || db.lists.find(l => l.id === lastListId) || db.lists[0];
+  const target = scanTarget();
   if (target) sel.value = target.id;
   $('#rListWrap').classList.toggle('hidden', !db.lists.length);
   renderRecipeRows();
@@ -1238,7 +1273,7 @@ function rowInfo(row) {
   if (own && own.p.needed) return { text: 'steht schon auf dem Zettel', onList: true };
   if (own) return { text: own.sec.name };
   const cat = findInCatalog(key);
-  return { text: cat ? cat.section + ' · ' + cat.from : 'neues Produkt' };
+  return { text: cat ? cat.section + ' · ' + cat.from : row.section ? row.section + ' · neu' : 'neues Produkt' };
 }
 function renderRecipeRows() {
   const ul = $('#rItems');
@@ -1295,7 +1330,7 @@ $('#rDelete').addEventListener('click', () => {
 
 function saveRecipe(draft, name, rows) {
   const data = { name, url: draft.url, yield: draft.yield, updatedAt: Date.now(),
-    ingredients: rows.map(r => ({ name: r.name.trim(), amount: r.amount.trim() })) };
+    ingredients: rows.map(r => ({ name: r.name.trim(), amount: r.amount.trim(), section: r.section || '' })) };
   let r = draft.id && db.recipes.find(x => x.id === draft.id);
   if (!r) {
     const same = db.recipes.find(x => lc(x.name) === lc(name));
@@ -1303,17 +1338,21 @@ function saveRecipe(draft, name, rows) {
   }
   if (r) Object.assign(r, data); else db.recipes.push({ id: uid(), ...data });
 }
-/* Zutat auf die Liste setzen: vorhandenes Produkt markieren, sonst im passenden Abschnitt anlegen */
-function addIngredient(list, row, recipeName) {
-  const key = ingredientKey(row.name);
-  const note = [row.amount.trim(), recipeName].filter(Boolean).join(' · ');
+/* Produkt (Zutat, Angebot) auf eine Liste setzen: vorhandenes markieren, sonst im passenden Abschnitt anlegen.
+   Abschnitt: wie das Produkt in anderen Listen/der Vorlage, sonst Vorschlag von Gemini, sonst Sonstiges/Allgemein */
+function putOnList(list, name, note, suggestedSection) {
+  const key = ingredientKey(name);
   const own = findInList(list, key);
   if (own) { if (!own.p.needed) { markNeeded(own.p); own.p.note = note; } return; }
   const cat = findInCatalog(key);
-  const secName = cat ? cat.section : list.sections.some(s => lc(s.name) === 'sonstiges') ? 'Sonstiges' : 'Allgemein';
+  const secName = cat ? cat.section : suggestedSection ||
+    (list.sections.some(s => lc(s.name) === 'sonstiges') ? 'Sonstiges' : 'Allgemein');
   let sec = list.sections.find(s => lc(s.name) === lc(secName));
   if (!sec) { sec = { id: uid(), name: secName, collapsed: false, products: [] }; list.sections.push(sec); }
-  addProductTo(sec, cat ? cat.name : row.name.trim(), note, true);
+  addProductTo(sec, cat ? cat.name : name.trim(), note, true);
+}
+function addIngredient(list, row, recipeName) {
+  putOnList(list, row.name, [row.amount.trim(), recipeName].filter(Boolean).join(' · '), row.section);
 }
 $('#formRecipe').addEventListener('submit', e => {
   if (!(e.submitter && e.submitter.value === 'ok')) { recipeDraft = null; return; }
@@ -1330,6 +1369,106 @@ $('#formRecipe').addEventListener('submit', e => {
   } else if (keep) toast('Rezept gespeichert');
   recipeDraft = null;
   $('#search').value = '';
+  save(); refresh();
+});
+
+/* ---------- Prospekt scannen (nur mit Scan-Dienst) ---------- */
+let offerDraft = null; // { laden, gueltig, rows: [{ name, produkt, menge, preis, grundpreis, hinweis, section, checked }] }
+
+function scanOffers() {
+  if (!SCAN_SERVICE_URL) { toast('Der Prospekt-Scan braucht den Scan-Dienst (siehe README).'); return; }
+  if (!navigator.onLine) { toast('Der Prospekt-Scan braucht eine Internetverbindung.'); return; }
+  $('#offerFile').click();
+}
+$('#offerFile').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const scanner = await getScanner();
+  if (!scanner) { toast('Der Scan-Dienst ist nicht erreichbar.'); return; }
+  let ergebnis;
+  try {
+    showBusy('Angebote werden erkannt…', 0.2);
+    ({ ergebnis } = await scanner.scan('prospekt', file, {
+      kontext: { abschnitte: sectionNames(scanTarget()) },
+      onStatus: s => busyStatus('Angebote werden erkannt…', s)
+    }));
+  } catch (err) { hideBusy(); console.error(err); toast(err.message); return; }
+  hideBusy();
+  const rows = (ergebnis.angebote || []).filter(a => a && txt(a.name)).map(a => ({
+    name: txt(a.name), produkt: txt(a.produkt), menge: txt(a.menge), preis: txt(a.preis),
+    grundpreis: txt(a.grundpreis), hinweis: txt(a.hinweis), section: txt(a.abschnitt), checked: false
+  }));
+  if (!rows.length) { toast('Auf dem Bild wurden keine Angebote erkannt.'); return; }
+  openOffers({ laden: txt(ergebnis.laden), gueltig: txt(ergebnis.gueltig), rows });
+});
+
+function openOffers(draft) {
+  offerDraft = draft;
+  $('#oMeta').textContent = [draft.laden, draft.gueltig].filter(Boolean).join(' · ');
+  $('#oMeta').classList.toggle('hidden', !draft.laden && !draft.gueltig);
+  const sel = $('#oList');
+  sel.innerHTML = '';
+  db.lists.forEach(l => { const o = document.createElement('option'); o.value = l.id; o.textContent = l.name; sel.appendChild(o); });
+  const target = scanTarget();
+  if (target) sel.value = target.id;
+  renderOffers();
+  $('#dlgOffers').showModal();
+}
+const offerTarget = () => db.lists.find(l => l.id === $('#oList').value) || null;
+function renderOffers() {
+  const ul = $('#oItems');
+  ul.innerHTML = '';
+  const list = offerTarget();
+  offerDraft.rows.forEach(row => {
+    const own = list && findInList(list, ingredientKey(row.name));
+    const onList = !!(own && own.p.needed);
+    if (onList) row.checked = false;
+    const cat = !own && findInCatalog(ingredientKey(row.name));
+    const where = onList ? 'steht schon auf dem Zettel' : own ? own.sec.name : cat ? cat.section : row.section;
+    const li = document.createElement('li');
+    li.className = 'recipe-row offer-row' + (onList ? ' have' : '') + (row.checked ? ' on' : '');
+    li.innerHTML = '<label class="rr-check"><input type="checkbox"></label>' +
+      '<div class="rr-main"><div class="o-head"><input class="rr-name" type="text" autocomplete="off" aria-label="Produkt">' +
+      '<b class="o-price"></b></div><div class="o-desc"></div></div>';
+    const cb = li.querySelector('input[type=checkbox]');
+    cb.checked = row.checked; cb.disabled = onList;
+    cb.setAttribute('aria-label', row.name + ' übernehmen');
+    cb.addEventListener('change', () => { row.checked = cb.checked; li.classList.toggle('on', cb.checked); updateOffersButton(); });
+    const nm = li.querySelector('.rr-name');
+    nm.value = row.name;
+    nm.addEventListener('input', () => { row.name = nm.value; updateOffersButton(); });
+    nm.addEventListener('change', renderOffers);
+    li.querySelector('.o-price').textContent = row.preis;
+    li.querySelector('.o-desc').textContent = [[row.produkt, row.menge].filter(Boolean).join(', '), row.grundpreis, row.hinweis, where]
+      .filter(Boolean).join(' · ');
+    ul.appendChild(li);
+  });
+  updateOffersButton();
+}
+function updateOffersButton() {
+  const n = offerDraft.rows.filter(r => r.checked && r.name.trim()).length;
+  $('#oOk').textContent = n ? n + (n === 1 ? ' Angebot' : ' Angebote') + ' übernehmen' : 'Schließen';
+}
+$('#oList').addEventListener('change', renderOffers);
+$('#formOffers').addEventListener('submit', e => {
+  if (!(e.submitter && e.submitter.value === 'ok')) { offerDraft = null; return; }
+  const list = offerTarget();
+  const picked = offerDraft.rows.filter(r => r.checked && r.name.trim());
+  if (list && picked.length) {
+    // Notiz: „Angebot Aldi: 0,89 € (Milsani H-Milch 1,5 %, 1 l)“
+    picked.forEach(r => {
+      const detail = [r.produkt, r.menge].filter(Boolean).join(', ');
+      const note = 'Angebot' + (offerDraft.laden ? ' ' + offerDraft.laden : '') + (r.preis ? ': ' + r.preis : '') +
+        (detail ? ' (' + detail + ')' : '') + (r.hinweis ? ' – ' + r.hinweis : '');
+      putOnList(list, r.name, note, r.section);
+    });
+    // erkannten Laden als Supermarkt vorschlagen, wenn für die Liste noch keiner gewählt ist
+    const store = offerDraft.laden && STORES.find(s => lc(offerDraft.laden).includes(lc(s)));
+    if (store && !list.trip && !list.lastStore) list.lastStore = store;
+    toast(picked.length + (picked.length === 1 ? ' Angebot' : ' Angebote') + ' auf „' + list.name + '“');
+  }
+  offerDraft = null;
   save(); refresh();
 });
 

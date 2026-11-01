@@ -55,6 +55,7 @@
       <button data-act="addProduct"><span data-icon="plus"></span>Produkt hinzufügen</button>
       <button data-act="addSection"><span data-icon="plus"></span>Abschnitt hinzufügen</button>
       <button data-act="scan"><span data-icon="camera"></span>Rezept scannen</button>
+      <button data-act="offers"><span data-icon="tag"></span>Prospekt scannen</button>
       <button data-act="recipes"><span data-icon="recipe"></span>Rezepte</button>
       <button data-act="orderSections"><span data-icon="sort"></span>Abschnitte sortieren</button>
       <button data-act="share"><span data-icon="share"></span>Liste teilen</button>
@@ -236,6 +237,7 @@
   <form method="dialog" id="formRecipe">
     <h2 id="dlgRecipeTitle">Rezept übernehmen</h2>
     <a id="rSource" class="rr-source hidden" target="_blank" rel="noopener"></a>
+    <p id="rNotice" class="info hidden"></p>
     <label>Name des Rezepts
       <input type="text" id="rName" autocomplete="off" placeholder="z. B. Lasagne">
     </label>
@@ -250,6 +252,22 @@
       <button type="button" class="btn ghost danger hidden" id="rDelete">Löschen</button>
       <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
       <button value="ok" class="btn primary" type="submit" id="rOk">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="dlgOffers">
+  <form method="dialog" id="formOffers">
+    <h2>Angebote übernehmen</h2>
+    <p id="oMeta" class="rr-hint"></p>
+    <label>Übernehmen in
+      <select id="oList"></select>
+    </label>
+    <p class="rr-hint">Tippe an, was du kaufen möchtest.</p>
+    <ul id="oItems" class="recipe-items"></ul>
+    <menu>
+      <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary" type="submit" id="oOk">Schließen</button>
     </menu>
   </form>
 </dialog>
@@ -272,6 +290,7 @@
 </dialog>
 
 <input type="file" id="recipeFile" accept="image/*" hidden>
+<input type="file" id="offerFile" accept="image/*" hidden>
 <input type="file" id="fileInput" accept="application/json" hidden>
 <div id="toast" class="toast hidden"></div>
 <div id="updateBar" class="update-bar hidden" role="status">
