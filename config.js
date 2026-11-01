@@ -1,3 +1,3 @@
-/* Adresse des Cloudflare Workers, der Rezept-Links ausliest (worker/rezept-worker.js, Einrichtung siehe README).
-   Leer lassen, solange kein Worker eingerichtet ist – dann bleiben Foto, Screenshot und Text. */
-const RECIPE_WORKER_URL = 'https://einkaufszettel-rezept.hepp.workers.dev/';
+/* Adresse des Scan-Dienstes (Repo mohnstollen/scan-dienst): Rezept- und Prospekt-Scan mit Gemini, Rezept-Links.
+   Leer lassen = ohne Scan-Dienst – Rezepte lassen sich dann nur mit der Texterkennung auf dem Gerät scannen. */
+const SCAN_SERVICE_URL = 'https://scan-dienst.hepp.workers.dev';
