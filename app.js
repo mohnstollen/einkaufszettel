@@ -995,9 +995,14 @@ async function shareList(list) {
   const link = location.origin + location.pathname + '#/teilen/' + list.shared.id;
   $('#shareLink').value = link;
   $('#btnShareSend').classList.toggle('hidden', !navigator.share);
-  $('#btnShareSend').onclick = () => navigator.share({ title: list.name, text: 'Unser Einkaufszettel „' + list.name + '“', url: link }).catch(() => {});
+  // Name, Markt und Datum stehen in der Nachricht selbst – die Link-Vorschau (z. B. in WhatsApp) zeigt immer
+  // „Einkaufszettel“, weil der Teil nach „#“ nie an den Server geht. Link im Text statt als url-Feld,
+  // damit ihn jede App mitsamt Text übernimmt.
+  const info = list.trip ? list.trip.store + ' · ' + fmtDay(list.trip.date) : list.lastStore;
+  const message = '🛒 Einkaufszettel „' + list.name + '“' + (info ? '\n' + info : '') + '\n' + link;
+  $('#btnShareSend').onclick = () => navigator.share({ title: list.name, text: message }).catch(() => {});
   $('#btnShareCopy').onclick = () => {
-    if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => toast('Link kopiert'));
+    if (navigator.clipboard) navigator.clipboard.writeText(message).then(() => toast('Nachricht kopiert'));
     else { $('#shareLink').select(); document.execCommand('copy'); toast('Link kopiert'); }
   };
   $('#btnShareStop').onclick = () => {
