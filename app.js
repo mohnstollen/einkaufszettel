@@ -47,7 +47,8 @@ function newList(name, template = []) {
 }
 function defaultDb() {
   return { lists: [newList('Lebensmittel', defaultTemplate())], template: defaultTemplate(),
-    recipes: [], since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '' };
+    recipes: [], since: Date.now(), lastBackup: 0, snoozeUntil: 0, userName: '',
+    deviceId: uid() + uid(), cloud: { enabled: false, email: '', lastUpload: 0, remoteAt: 0, hash: '' } };
 }
 
 /* ---------- Laden / Migration / Prüfung ---------- */
@@ -97,8 +98,12 @@ function toDb(s) {
   else return null;
   const seen = new Set();
   lists.forEach(l => { if (seen.has(l.id)) l.id = uid(); seen.add(l.id); });
+  const c = isObj(s.cloud) ? s.cloud : {};
   return { lists, since: num(s.since) || Date.now(), lastBackup: num(s.lastBackup), snoozeUntil: num(s.snoozeUntil),
     userName: str(s.userName),
+    deviceId: str(s.deviceId) || uid() + uid(),
+    // Cloud-Sicherung: eingeschaltet, Konto, letzter Upload, Stand der Sicherung beim letzten Abgleich, Prüfsumme
+    cloud: { enabled: !!c.enabled, email: str(c.email), lastUpload: num(c.lastUpload), remoteAt: num(c.remoteAt), hash: str(c.hash) },
     template: Array.isArray(s.template)
       ? s.template.filter(isObj).map(t => ({ name: str(t.name).trim() || 'Allgemein',
           products: arr(t.products).filter(n => str(n).trim()).map(n => n.trim()) }))
@@ -121,6 +126,10 @@ function load() {
 let saveWarned = false;
 function save() {
   if (sync) db.lists.forEach(l => { if (l.shared) sync.push(l); });
+  writeLocal();
+  scheduleCloudBackup();
+}
+function writeLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); saveWarned = false; }
   catch {
     if (saveWarned) return;
@@ -211,6 +220,7 @@ $('#btnBack').addEventListener('click', () => { if (fromHome) history.back(); el
 
 const BACKUP_DAYS = 30;
 function backupDue() {
+  if (db.cloud.enabled && Date.now() - db.cloud.lastUpload < 7 * 864e5) return false;
   const hasData = db.lists.some(l => l.archive.length || l.sections.some(s => s.products.length));
   const now = Date.now();
   return hasData && now > db.snoozeUntil && now - Math.max(db.lastBackup, db.since) > BACKUP_DAYS * 864e5;
@@ -958,6 +968,7 @@ $('#fileInput').addEventListener('change', async e => {
       if (confirm('Alle Listen durch das Backup ersetzen (' + data.lists.length + ' Listen)?')) {
         if (sync) db.lists.forEach(l => sync.unwatch(l));
         db = { ...data, lastBackup: db.lastBackup, since: db.since, snoozeUntil: db.snoozeUntil, userName: db.userName,
+          deviceId: db.deviceId, cloud: db.cloud,
           template: Array.isArray(s.template) ? data.template : db.template,
           recipes: Array.isArray(s.recipes) ? data.recipes : db.recipes };
         save(); refresh(); toast('Backup geladen');
@@ -1662,7 +1673,8 @@ function renderMore() {
   };
   const products = db.template.reduce((n, t) => n + t.products.length, 0);
   section('Profil', [row('Dein Name', db.userName || 'noch nicht festgelegt', 'Ändern', () => askName(true))]);
-  section('Datensicherung', [
+  section('Cloud-Sicherung', cloudRows(row));
+  section('Backup-Datei', [
     row('Letztes Backup', db.lastBackup ? fmtStamp(new Date(db.lastBackup).toISOString()) : 'noch keins', 'Speichern', backupJSON),
     row('Backup einlesen', 'Listen, Rezepte und Vorlage aus einer Datei', 'Einlesen', () => $('#fileInput').click())
   ]);
@@ -1692,6 +1704,165 @@ function recipeBox(recipes, q) {
   return box;
 }
 
+/* ---------- Cloud-Sicherung im Google-Konto (Firestore, siehe sync.js) ----------
+   Nach jeder Änderung (gebündelt) und beim Verlassen der App wird alles gesichert: Listen, Rezepte, Vorlage.
+   Hat ein anderes Gerät mit demselben Konto inzwischen gesichert, wird nicht überschrieben, sondern gefragt. */
+let cloudTimer = null, cloudBusy = false, cloudConflict = null, cloudError = '';
+const CLOUD_DELAY = 20_000;
+const hashOf = text => { let h = 5381; for (let i = 0; i < text.length; i++) h = (h * 33 ^ text.charCodeAt(i)) >>> 0; return h.toString(36) + '.' + text.length; };
+const backupPayload = () => JSON.stringify({ version: 4, lists: db.lists, template: db.template, recipes: db.recipes, userName: db.userName });
+const fmtMs = ms => fmtStamp(new Date(ms).toISOString());
+const countText = info => [info.listen + (info.listen === 1 ? ' Liste' : ' Listen'), info.rezepte + (info.rezepte === 1 ? ' Rezept' : ' Rezepte')].join(', ');
+
+function scheduleCloudBackup(delay = CLOUD_DELAY) {
+  if (!db.cloud || !db.cloud.enabled) return;
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(() => cloudBackup(), delay);
+}
+
+async function cloudBackup({ force = false } = {}) {
+  clearTimeout(cloudTimer); cloudTimer = null;
+  if (!db.cloud.enabled || cloudBusy) return;
+  const json = backupPayload(), hash = hashOf(json);
+  if (!force && hash === db.cloud.hash) return;
+  cloudBusy = true;
+  try {
+    const m = await loadSync();
+    if (!m || !m.account()) { cloudError = 'nicht angemeldet'; return; }
+    const info = await m.backupInfo();
+    if (!force && info && info.device !== db.deviceId && info.updatedAt > db.cloud.remoteAt) { cloudConflict = info; return; }
+    const at = await m.uploadBackup(json, { device: db.deviceId, listen: db.lists.length, rezepte: db.recipes.length });
+    Object.assign(db.cloud, { lastUpload: at, remoteAt: at, hash });
+    cloudConflict = null; cloudError = '';
+    writeLocal();
+  } catch (e) {
+    console.error(e);
+    cloudError = e.code || e.message;
+  } finally {
+    cloudBusy = false;
+    if (view === 'more') renderMore();
+  }
+}
+
+/* Beim Start: Gibt es eine neuere Sicherung von einem anderen Gerät? */
+async function cloudCheck() {
+  try {
+    if (!sync.account()) { cloudError = 'nicht angemeldet'; return; }
+    const info = await sync.backupInfo();
+    if (info && info.device !== db.deviceId && info.updatedAt > db.cloud.remoteAt) {
+      cloudConflict = info;
+      toast('Neuere Cloud-Sicherung von einem anderen Gerät gefunden – siehe „Mehr“.', 6000);
+    } else scheduleCloudBackup(3000);
+  } catch (e) { console.error(e); }
+  if (view === 'more') renderMore();
+}
+
+/* Auswahl-Dialog mit mehreren Antworten → Promise mit dem Wert des gewählten Buttons ('' = Abbrechen) */
+function choose(title, text, buttons) {
+  $('#chTitle').textContent = title;
+  $('#chText').textContent = text;
+  const menu = $('#chButtons');
+  menu.innerHTML = '<button value="" class="btn ghost" type="submit">Abbrechen</button>';
+  buttons.forEach(([value, label, primary]) => {
+    const b = document.createElement('button');
+    b.type = 'submit'; b.value = value; b.textContent = label; b.className = 'btn' + (primary ? ' primary' : '');
+    menu.appendChild(b);
+  });
+  const dlg = $('#dlgChoice');
+  dlg.returnValue = '';
+  dlg.showModal();
+  return new Promise(res => dlg.addEventListener('close', () => res(dlg.returnValue), { once: true }));
+}
+
+async function cloudSignIn() {
+  const m = await loadSync();
+  if (!m) return;
+  let acc;
+  try { acc = await m.signInWithGoogle(); }
+  catch (e) {
+    if (!/popup-closed|cancelled-popup/.test(e.code || '')) toast('Anmeldung fehlgeschlagen (' + (e.code || e.message) + ')', 6000);
+    console.error(e);
+    return;
+  }
+  Object.assign(db.cloud, { enabled: true, email: acc.email, hash: '' });
+  cloudConflict = null; cloudError = '';
+  writeLocal();
+  const info = await m.backupInfo().catch(() => null);
+  if (info && info.device !== db.deviceId) {
+    const pick = await choose('Sicherung gefunden',
+      'Für ' + acc.email + ' gibt es eine Sicherung vom ' + fmtMs(info.updatedAt) + ' (' + countText(info) + '). ' +
+      'Möchtest du sie auf dieses Gerät holen (die Daten hier werden ersetzt) oder die Daten dieses Geräts sichern (die Sicherung wird überschrieben)?',
+      [['upload', 'Dieses Gerät sichern'], ['restore', 'Sicherung holen', true]]);
+    if (pick === 'restore') return cloudRestore();
+    if (pick !== 'upload') { db.cloud.remoteAt = 0; cloudConflict = info; writeLocal(); renderMore(); return; }
+  }
+  await cloudBackup({ force: true });
+  toast('Cloud-Sicherung eingeschaltet');
+}
+
+async function cloudRestore() {
+  const m = await loadSync();
+  if (!m) return;
+  showBusy('Sicherung wird geladen…', 0.5);
+  try {
+    const r = await m.downloadBackup();
+    if (!r) { toast('Keine Sicherung gefunden'); return; }
+    const data = toDb(JSON.parse(r.json));
+    if (!data) throw new Error('Format');
+    db.lists.forEach(l => m.unwatch(l));
+    db = { ...data, deviceId: db.deviceId, since: db.since, lastBackup: db.lastBackup, snoozeUntil: db.snoozeUntil,
+      userName: data.userName || db.userName, cloud: { ...db.cloud, remoteAt: r.info.updatedAt } };
+    db.cloud.hash = hashOf(backupPayload()); // gerade geholt – nicht sofort wieder hochladen
+    cloudConflict = null; cloudError = '';
+    writeLocal();
+    db.lists.forEach(l => { if (l.shared) m.watch(l); });
+    refresh();
+    toast('Sicherung vom ' + fmtMs(r.info.updatedAt) + ' wiederhergestellt');
+  } catch (e) {
+    console.error(e);
+    toast('Wiederherstellen fehlgeschlagen (' + (e.code || e.message) + ')', 6000);
+  } finally { hideBusy(); }
+}
+
+async function cloudSignOut() {
+  if (!confirm('Cloud-Sicherung ausschalten und abmelden? Die Sicherung im Google-Konto bleibt erhalten.')) return;
+  const m = await loadSync();
+  try { if (m) await m.signOutGoogle(); } catch (e) { console.error(e); }
+  db.cloud = { enabled: false, email: '', lastUpload: 0, remoteAt: 0, hash: '' };
+  cloudConflict = null; cloudError = '';
+  writeLocal(); renderMore();
+}
+
+function cloudRows(row) {
+  if (!db.cloud.enabled) {
+    return [row('Automatisch sichern', 'Listen, Rezepte und Vorlage in deinem Google-Konto – auch für ein neues Handy', 'Mit Google anmelden', cloudSignIn)];
+  }
+  const rows = [
+    row('Angemeldet', db.cloud.email, 'Abmelden', cloudSignOut),
+    row('Zuletzt gesichert', cloudBusy ? 'wird gesichert …' : db.cloud.lastUpload ? fmtMs(db.cloud.lastUpload) : 'noch nicht', 'Jetzt sichern', () => cloudBackup({ force: !cloudConflict })),
+    row('Wiederherstellen', 'Sicherung aus dem Google-Konto auf dieses Gerät holen', 'Holen', async () => {
+      if (await choose('Wiederherstellen', 'Die Daten auf diesem Gerät werden durch die Sicherung ersetzt.', [['ok', 'Wiederherstellen', true]]) === 'ok') cloudRestore();
+    })
+  ];
+  if (cloudConflict) {
+    const r = row('Neuere Sicherung', 'Ein anderes Gerät hat am ' + fmtMs(cloudConflict.updatedAt) + ' gesichert (' + countText(cloudConflict) +
+      '). Bis du entscheidest, wird hier nichts gesichert.', 'Entscheiden', async () => {
+      const pick = await choose('Neuere Sicherung', 'Sicherung des anderen Geräts übernehmen oder mit den Daten dieses Geräts überschreiben?',
+        [['upload', 'Überschreiben'], ['restore', 'Übernehmen', true]]);
+      if (pick === 'restore') cloudRestore();
+      else if (pick === 'upload') cloudBackup({ force: true });
+    });
+    r.classList.add('warn');
+    rows.unshift(r);
+  } else if (cloudError) {
+    const r = row('Problem', cloudError === 'nicht angemeldet' ? 'Nicht mehr angemeldet – bitte erneut anmelden.' : 'Sicherung fehlgeschlagen (' + cloudError + ')',
+      cloudError === 'nicht angemeldet' ? 'Anmelden' : 'Erneut', cloudError === 'nicht angemeldet' ? cloudSignIn : () => cloudBackup({ force: true }));
+    r.classList.add('warn');
+    rows.unshift(r);
+  }
+  return rows;
+}
+
 /* ---------- App-Update ---------- */
 function showUpdate(worker) {
   $('#updateBar').classList.remove('hidden');
@@ -1710,6 +1881,7 @@ function toast(msg, ms = 2000) {
 applyIcons();
 route();
 requestPersistence();
-if (db.lists.some(l => l.shared)) loadSync();
+if (db.lists.some(l => l.shared) || db.cloud.enabled) loadSync().then(m => m && db.cloud.enabled && cloudCheck());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && cloudTimer) cloudBackup(); });
 window.addEventListener('online', () => state && renderSyncState());
 window.addEventListener('offline', () => state && renderSyncState());

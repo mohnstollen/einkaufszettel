@@ -257,3 +257,7 @@ dialog .chip{padding:4px 10px;font-size:12px}
 .mr-label{font-size:15px}
 .mr-value{font-size:13px;color:var(--muted)}
 .more-row .btn{font-size:14px;padding:7px 12px}
+.more-row.warn{background:var(--accent-soft)}
+.more-row.warn .mr-label{font-weight:600}
+.ch-text{font-size:14px;line-height:1.45;margin:0 0 14px}
+#chButtons{flex-wrap:wrap}

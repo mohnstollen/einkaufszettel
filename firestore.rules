@@ -1,5 +1,5 @@
 rules_version = '2';
-// Zugriff nur für angemeldete (anonyme) Nutzer und nur mit bekannter Listen-ID.
+// Geteilte Listen: Zugriff nur für angemeldete (anonyme) Nutzer und nur mit bekannter Listen-ID.
 // Die ID ist lang und zufällig – wer den Einladungslink hat, darf die Liste lesen und bearbeiten.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -9,6 +9,14 @@ service cloud.firestore {
 
       match /{coll}/{docId} {
         allow read, write: if request.auth != null && coll in ['sections', 'products', 'archive'];
+      }
+    }
+
+    // Cloud-Sicherung: nur das eigene (Google-)Konto darf lesen und schreiben
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+      match /teile/{teil} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
       }
     }
   }

@@ -11,6 +11,7 @@ PWA für Einkaufszettel
 - Rezepte und Prospekte scannen (Gemini über den Scan-Dienst, ohne Internet Texterkennung auf dem Gerät), Rezept-Links;
   fehlende Zutaten per Fingertipp auf eine Liste übernehmen, Rezepte merken und über die Suche wiederfinden
 - Listen lassen sich per Einladungslink mit anderen teilen und werden live abgeglichen (siehe unten)
+- Cloud-Sicherung im eigenen Google-Konto (Mehr → Mit Google anmelden): automatisch, auch zum Umzug auf ein neues Handy
 - Private Listen bleiben lokal im Browser; Backup/Wiederherstellung als JSON über das Menü der Startseite,
   mit Erinnerung, wenn das letzte Backup älter als 30 Tage ist
 
@@ -40,6 +41,20 @@ Der Punkt am Teilen-Symbol oben zeigt den Status: grün = aktuell, gelb = wird g
 
 Wer den Link kennt, kann die Liste lesen und bearbeiten. „Teilen beenden“ löst die Liste nur auf dem
 eigenen Gerät (sie bleibt als private Kopie erhalten).
+
+## Cloud-Sicherung (Google-Konto)
+Unter **Mehr → Mit Google anmelden** werden Listen, Rezepte und Vorlage automatisch in Firestore gesichert
+(gebündelt etwa 20 Sekunden nach einer Änderung und beim Verlassen der App; ohne Netz später). Auf einem neuen Gerät
+nach der Anmeldung **Sicherung holen** wählen. Hat ein anderes Gerät mit demselben Konto inzwischen gesichert, wird
+nichts überschrieben – unter „Mehr“ erscheint ein Hinweis zum Entscheiden.
+
+Einrichtung (einmalig, zusätzlich zu „Listen teilen“):
+1. Firebase-Konsole → **Authentication → Anmeldemethode → Google** aktivieren.
+2. Den aktuellen Inhalt von [`firestore.rules`](firestore.rules) unter **Firestore → Regeln** veröffentlichen
+   (neu: Bereich `users/{uid}`, den nur das eigene Konto lesen und schreiben darf).
+
+Gespeichert wird unter `users/{uid}` (Stand, Gerät, Anzahl) und `users/{uid}/teile/{n}` (die Sicherung als JSON,
+in Teile zerlegt). Die Backup-Datei unter „Mehr“ funktioniert weiterhin unabhängig davon.
 
 ## Rezepte und Prospekte
 - **Menü → Rezept scannen:** Foto oder Screenshot eines Rezepts. Die Zutaten erkennt Gemini über den
