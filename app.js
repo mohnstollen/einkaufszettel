@@ -534,8 +534,9 @@ function currentMarkedEntries() {
 function openTripDialog(mode, presetStore) {
   tripDialogMode = mode;
   const isNew = mode === 'new';
-  $('#dlgTripTitle').textContent = isNew ? 'Neuer Einkauf' : (state.trip ? 'Einkauf bearbeiten' : 'Wo und wann kaufst du ein?');
-  $('#btnTripOk').textContent = isNew ? 'Starten' : 'Speichern';
+  $('#dlgTripTitle').textContent = isNew ? 'Einkauf abschließen' : (state.trip ? 'Einkauf bearbeiten' : 'Wo und wann kaufst du ein?');
+  $('#btnTripOk').textContent = isNew ? 'Abschließen' : 'Speichern';
+  $('#tripNext').classList.toggle('hidden', !isNew);
 
   const base = isNew || !state.trip ? { date: todayISO(), store: presetStore || state.lastStore } : state.trip;
   $('#tDate').value = base.date;
@@ -544,12 +545,13 @@ function openTripDialog(mode, presetStore) {
 
   const info = $('#tripInfo');
   const entries = currentMarkedEntries();
-  if (isNew && entries.length) {
+  if (isNew) {
     const total = entries.reduce((n, e) => n + e.items.length, 0);
     const done = entries.reduce((n, e) => n + e.items.filter(i => i.done).length, 0);
-    info.textContent = 'Die aktuelle Liste (' + done + ' / ' + total + ' erledigt' +
-      (state.trip ? ', ' + state.trip.store + ', ' + fmtDay(state.trip.date) : '') +
-      ') wird archiviert. Deine Produkte bleiben erhalten.';
+    info.textContent = entries.length
+      ? 'Der Einkauf (' + done + ' / ' + total + ' erledigt' + (state.trip ? ', ' + state.trip.store + ', ' + fmtDay(state.trip.date) : '') +
+        ') kommt ins Archiv, alle Markierungen werden zurückgesetzt. Deine Produkte bleiben in der Liste.'
+      : 'Es ist nichts markiert – es wird nichts archiviert.';
     info.classList.remove('hidden');
   } else info.classList.add('hidden');
 
@@ -577,7 +579,7 @@ $('#formTrip').addEventListener('submit', e => {
     }
     state.sections.forEach(s => s.products.forEach(p => { p.needed = false; p.done = false; }));
     state.onlyNeeded = false;
-    toast(entries.length ? 'Archiviert – neuer Einkauf bei ' + store : 'Neuer Einkauf bei ' + store);
+    toast(entries.length ? 'Einkauf abgeschlossen und archiviert' : 'Nächster Einkauf bei ' + store);
   } else toast('Einkauf aktualisiert');
 
   state.trip = { date, store };

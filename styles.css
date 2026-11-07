@@ -29,7 +29,8 @@ body{margin:0;background:var(--bg);color:var(--fg);
 .btn.ghost:active{background:var(--bg)}
 .btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 .btn.icon-only{font-size:18px;padding:8px 11px;line-height:1}
-#btnNewTrip{padding:8px 12px;font-size:14px}
+#btnNewTrip{padding:8px 12px;font-size:14px;display:inline-flex;align-items:center;gap:5px}
+#tripNext{margin:2px 0 6px;font-weight:600;color:var(--fg)}
 
 .trip-bar{display:flex;gap:16px;align-items:center;width:100%;margin-top:8px;padding:8px 10px;
   border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);

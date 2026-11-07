@@ -39,7 +39,7 @@
     <h1 id="listTitle">Einkaufszettel</h1>
     <button id="syncState" class="sync hidden" type="button"><span data-icon="share"></span></button>
     <span class="counter" id="counter">0 / 0</span>
-    <button id="btnNewTrip" class="btn primary" title="Liste archivieren und neuen Einkauf starten">Neuer Einkauf</button>
+    <button id="btnNewTrip" class="btn primary" title="Einkauf abschließen: Liste archivieren und Markierungen zurücksetzen"><span data-icon="check"></span> Abschließen</button>
   </div>
   <button id="tripBar" class="trip-bar" type="button" title="Supermarkt und Datum ändern"></button>
   <div class="topbar-row tools">
@@ -118,8 +118,9 @@
 
 <dialog id="dlgTrip">
   <form method="dialog" id="formTrip">
-    <h2 id="dlgTripTitle">Neuer Einkauf</h2>
+    <h2 id="dlgTripTitle">Einkauf abschließen</h2>
     <p id="tripInfo" class="info hidden"></p>
+    <p id="tripNext" class="rr-hint hidden">Nächster Einkauf</p>
     <label><span class="lbl"><span data-icon="calendar"></span>Datum</span>
       <input type="date" id="tDate" required>
     </label>
@@ -131,7 +132,7 @@
     </label>
     <menu>
       <button value="cancel" class="btn ghost" type="submit" formnovalidate>Abbrechen</button>
-      <button value="ok" class="btn primary" type="submit" id="btnTripOk">Starten</button>
+      <button value="ok" class="btn primary" type="submit" id="btnTripOk">Abschließen</button>
     </menu>
   </form>
 </dialog>
