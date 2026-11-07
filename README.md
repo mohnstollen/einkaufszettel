@@ -6,6 +6,8 @@ PWA für Einkaufszettel
 - Pro Liste: Supermarkt und Datum, Archiv vergangener Einkäufe und Statistik
 - Listen und Abschnitte frei sortierbar; Produkte lassen sich in andere Listen verschieben oder kopieren
 - Suche mit Schnell-Hinzufügen (Enter legt einen nicht gefundenen Begriff als Produkt an)
+- Tabs „Listen · Rezepte · Mehr“; Rezepte mit Kategorie (z. B. Hauptgericht, Kuchen & Torten) und Merkmalen
+  (z. B. Weihnachten, vegetarisch), Filter und Suche auch nach Zutaten
 - Rezepte und Prospekte scannen (Gemini über den Scan-Dienst, ohne Internet Texterkennung auf dem Gerät), Rezept-Links;
   fehlende Zutaten per Fingertipp auf eine Liste übernehmen, Rezepte merken und über die Suche wiederfinden
 - Listen lassen sich per Einladungslink mit anderen teilen und werden live abgeglichen (siehe unten)

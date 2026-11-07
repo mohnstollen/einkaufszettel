@@ -25,12 +25,7 @@
     <button id="btnHomeMenu" class="btn ghost icon-only" title="Menü" aria-label="Menü"><span data-icon="more"></span></button>
     <div class="menu hidden" id="homeMenu">
       <button data-act="newList"><span data-icon="plus"></span>Neue Liste</button>
-      <button data-act="recipes"><span data-icon="recipe"></span>Rezepte</button>
       <button data-act="orderLists"><span data-icon="sort"></span>Listen sortieren</button>
-      <button data-act="name"><span data-icon="user"></span>Mein Name</button>
-      <hr>
-      <button data-act="backup">Backup (JSON) speichern</button>
-      <button data-act="restore">Backup einlesen</button>
     </div>
   </div>
 </header>
@@ -71,6 +66,34 @@
 
 <main id="list"></main>
 </div>
+
+<div id="viewRecipes" class="hidden">
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Rezepte</h1>
+  </div>
+  <div class="topbar-row tools">
+    <input type="search" id="recipeSearch" placeholder="Rezept oder Zutat suchen…" autocomplete="off">
+  </div>
+  <div id="recipeChips" class="chips"></div>
+</header>
+<main id="recipes"></main>
+</div>
+
+<div id="viewMore" class="hidden">
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Mehr</h1>
+  </div>
+</header>
+<main id="more"></main>
+</div>
+
+<nav id="tabbar" class="tabbar hidden" aria-label="Bereiche">
+  <button type="button" data-nav="home"><span data-icon="list"></span><span>Listen</span></button>
+  <button type="button" data-nav="recipes"><span data-icon="recipe"></span><span>Rezepte</span></button>
+  <button type="button" data-nav="more"><span data-icon="gear"></span><span>Mehr</span></button>
+</nav>
 
 <button class="fab" id="fab" title="Produkt hinzufügen" aria-label="Produkt hinzufügen"><span data-icon="plus"></span></button>
 
@@ -218,17 +241,16 @@
   </form>
 </dialog>
 
-<dialog id="dlgRecipes">
+<dialog id="dlgNewRecipe">
   <form method="dialog">
-    <h2>Rezepte</h2>
-    <div class="share-actions">
-      <button type="button" class="btn primary" id="btnScan"><span data-icon="camera"></span> Foto / Screenshot</button>
-      <button type="button" class="btn" id="btnPaste">Text oder Link</button>
+    <h2>Neues Rezept</h2>
+    <div class="new-recipe">
+      <button type="button" class="btn primary" id="btnScan"><span data-icon="camera"></span> Foto oder Screenshot</button>
+      <button type="button" class="btn" id="btnPaste"><span data-icon="edit"></span> Text oder Link einfügen</button>
+      <button type="button" class="btn" id="btnManual"><span data-icon="plus"></span> Von Hand anlegen</button>
     </div>
-    <input type="search" id="recipeSearch" placeholder="Rezept suchen…" autocomplete="off">
-    <div id="recipeList" class="recipe-list"></div>
     <menu>
-      <button value="cancel" class="btn ghost" type="submit">Schließen</button>
+      <button value="cancel" class="btn ghost" type="submit">Abbrechen</button>
     </menu>
   </form>
 </dialog>
@@ -241,6 +263,10 @@
     <label>Name des Rezepts
       <input type="text" id="rName" autocomplete="off" placeholder="z. B. Lasagne">
     </label>
+    <label>Kategorie
+      <select id="rCat"></select>
+    </label>
+    <div id="rTags" class="chips wrap" aria-label="Merkmale"></div>
     <label id="rListWrap">Übernehmen in
       <select id="rList"></select>
     </label>
