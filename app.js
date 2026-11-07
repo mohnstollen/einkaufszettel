@@ -103,7 +103,7 @@ function toDb(s) {
     userName: str(s.userName),
     deviceId: str(s.deviceId) || uid() + uid(),
     // Cloud-Sicherung: eingeschaltet, Konto, letzter Upload, Stand der Sicherung beim letzten Abgleich, Prüfsumme
-    cloud: { enabled: !!c.enabled, email: str(c.email), lastUpload: num(c.lastUpload), remoteAt: num(c.remoteAt), hash: str(c.hash) },
+    cloud: { enabled: !!c.enabled, email: str(c.email), lastUpload: num(c.lastUpload), remoteAt: num(c.remoteAt), hash: str(c.hash), hv: num(c.hv) },
     template: Array.isArray(s.template)
       ? s.template.filter(isObj).map(t => ({ name: str(t.name).trim() || 'Allgemein',
           products: arr(t.products).filter(n => str(n).trim()).map(n => n.trim()) }))
@@ -1710,7 +1710,12 @@ function recipeBox(recipes, q) {
 let cloudTimer = null, cloudBusy = false, cloudConflict = null, cloudError = '';
 const CLOUD_DELAY = 20_000;
 const hashOf = text => { let h = 5381; for (let i = 0; i < text.length; i++) h = (h * 33 ^ text.charCodeAt(i)) >>> 0; return h.toString(36) + '.' + text.length; };
-const backupPayload = () => JSON.stringify({ version: 4, lists: db.lists, template: db.template, recipes: db.recipes, userName: db.userName });
+/* Inhalt der Sicherung. Geteilte Listen sind ohnehin live in Firebase – von ihnen nur Name und Einladung, sonst
+   würde jede Änderung des Partners alle Geräte als „geändert“ markieren und ständig Konflikte auslösen. */
+const HASH_VERSION = 2;
+const backupPayload = () => JSON.stringify({ version: 4, userName: db.userName, template: db.template, recipes: db.recipes,
+  lists: db.lists.map(l => l.shared ? { id: l.id, name: l.name, shared: l.shared, sections: [] } : l) });
+const localChanged = () => hashOf(backupPayload()) !== db.cloud.hash;
 const fmtMs = ms => fmtStamp(new Date(ms).toISOString());
 const countText = info => [info.listen + (info.listen === 1 ? ' Liste' : ' Listen'), info.rezepte + (info.rezepte === 1 ? ' Rezept' : ' Rezepte')].join(', ');
 
@@ -1732,7 +1737,7 @@ async function cloudBackup({ force = false } = {}) {
     const info = await m.backupInfo();
     if (!force && info && info.device !== db.deviceId && info.updatedAt > db.cloud.remoteAt) { cloudConflict = info; return; }
     const at = await m.uploadBackup(json, { device: db.deviceId, listen: db.lists.length, rezepte: db.recipes.length });
-    Object.assign(db.cloud, { lastUpload: at, remoteAt: at, hash });
+    Object.assign(db.cloud, { lastUpload: at, remoteAt: at, hash, hv: HASH_VERSION });
     cloudConflict = null; cloudError = '';
     writeLocal();
   } catch (e) {
@@ -1744,18 +1749,29 @@ async function cloudBackup({ force = false } = {}) {
   }
 }
 
-/* Beim Start: Gibt es eine neuere Sicherung von einem anderen Gerät? */
+/* Abgleich mit anderen Geräten (beim Start, beim Zurückkehren in die App und alle 2 Minuten):
+   Neuere Sicherung eines anderen Geräts + hier nichts geändert → still übernehmen.
+   Beide geändert → Hinweis „Neuere Sicherung – Entscheiden“. Nur hier geändert → hochladen. */
+const CLOUD_CHECK_MS = 120_000;
 async function cloudCheck() {
+  if (!db.cloud.enabled || !sync || cloudBusy) return;
   try {
     if (!sync.account()) { cloudError = 'nicht angemeldet'; return; }
     const info = await sync.backupInfo();
+    const changed = localChanged();
     if (info && info.device !== db.deviceId && info.updatedAt > db.cloud.remoteAt) {
-      cloudConflict = info;
-      toast('Neuere Cloud-Sicherung von einem anderen Gerät gefunden – siehe „Mehr“.', 6000);
-    } else scheduleCloudBackup(3000);
+      if (!changed) {
+        // nicht mitten in einer Bearbeitung austauschen – dann beim nächsten Mal
+        if (!document.querySelector('dialog[open]')) await cloudRestore({ auto: true });
+      } else {
+        if (!cloudConflict) toast('Auf einem anderen Gerät wurde auch geändert – bitte unter „Mehr“ entscheiden.', 6000);
+        cloudConflict = info;
+      }
+    } else if (changed) scheduleCloudBackup(3000);
   } catch (e) { console.error(e); }
   if (view === 'more') renderMore();
 }
+setInterval(() => { if (document.visibilityState === 'visible') cloudCheck(); }, CLOUD_CHECK_MS);
 
 /* Auswahl-Dialog mit mehreren Antworten → Promise mit dem Wert des gewählten Buttons ('' = Abbrechen) */
 function choose(title, text, buttons) {
@@ -1800,10 +1816,10 @@ async function cloudSignIn() {
   toast('Cloud-Sicherung eingeschaltet');
 }
 
-async function cloudRestore() {
+async function cloudRestore({ auto = false } = {}) {
   const m = await loadSync();
   if (!m) return;
-  showBusy('Sicherung wird geladen…', 0.5);
+  if (!auto) showBusy('Sicherung wird geladen…', 0.5);
   try {
     const r = await m.downloadBackup();
     if (!r) { toast('Keine Sicherung gefunden'); return; }
@@ -1813,15 +1829,19 @@ async function cloudRestore() {
     db = { ...data, deviceId: db.deviceId, since: db.since, lastBackup: db.lastBackup, snoozeUntil: db.snoozeUntil,
       userName: data.userName || db.userName, cloud: { ...db.cloud, remoteAt: r.info.updatedAt } };
     db.cloud.hash = hashOf(backupPayload()); // gerade geholt – nicht sofort wieder hochladen
+    db.cloud.hv = HASH_VERSION;
     cloudConflict = null; cloudError = '';
     writeLocal();
     db.lists.forEach(l => { if (l.shared) m.watch(l); });
+    // geöffnete Liste auf das neue Objekt umstellen (oder zur Übersicht, falls es sie nicht mehr gibt)
+    if (state) { state = db.lists.find(l => l.id === state.id) || null; if (!state) { location.hash = ''; return; } }
     refresh();
-    toast('Sicherung vom ' + fmtMs(r.info.updatedAt) + ' wiederhergestellt');
+    toast(auto ? 'Neuer Stand von einem anderen Gerät übernommen (' + fmtMs(r.info.updatedAt) + ')'
+      : 'Sicherung vom ' + fmtMs(r.info.updatedAt) + ' wiederhergestellt', auto ? 3000 : 2000);
   } catch (e) {
     console.error(e);
     toast('Wiederherstellen fehlgeschlagen (' + (e.code || e.message) + ')', 6000);
-  } finally { hideBusy(); }
+  } finally { if (!auto) hideBusy(); }
 }
 
 async function cloudSignOut() {
@@ -1881,7 +1901,12 @@ function toast(msg, ms = 2000) {
 applyIcons();
 route();
 requestPersistence();
+// Prüfsumme aus einer älteren Version: als abgeglichen annehmen (Inhalt der Sicherung hat sich geändert, nicht die Daten)
+if (db.cloud.enabled && db.cloud.hv !== HASH_VERSION) { db.cloud.hash = hashOf(backupPayload()); db.cloud.hv = HASH_VERSION; writeLocal(); }
 if (db.lists.some(l => l.shared) || db.cloud.enabled) loadSync().then(m => m && db.cloud.enabled && cloudCheck());
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && cloudTimer) cloudBackup(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { if (cloudTimer) cloudBackup(); }
+  else cloudCheck();
+});
 window.addEventListener('online', () => state && renderSyncState());
 window.addEventListener('offline', () => state && renderSyncState());

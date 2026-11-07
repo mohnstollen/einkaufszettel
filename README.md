@@ -45,8 +45,13 @@ eigenen Gerät (sie bleibt als private Kopie erhalten).
 ## Cloud-Sicherung (Google-Konto)
 Unter **Mehr → Mit Google anmelden** werden Listen, Rezepte und Vorlage automatisch in Firestore gesichert
 (gebündelt etwa 20 Sekunden nach einer Änderung und beim Verlassen der App; ohne Netz später). Auf einem neuen Gerät
-nach der Anmeldung **Sicherung holen** wählen. Hat ein anderes Gerät mit demselben Konto inzwischen gesichert, wird
-nichts überschrieben – unter „Mehr“ erscheint ein Hinweis zum Entscheiden.
+nach der Anmeldung **Sicherung holen** wählen.
+
+Mehrere Geräte mit demselben Konto bleiben auf demselben Stand: Beim Öffnen, beim Zurückkehren in die App und alle
+2 Minuten prüft die App, ob ein anderes Gerät neuer gesichert hat. Wurde hier seitdem nichts geändert, wird der neue
+Stand still übernommen. Haben beide Geräte geändert, erscheint unter „Mehr“ ein Hinweis zum Entscheiden (Übernehmen
+oder Überschreiben – ganz oder gar nicht, kein Zusammenführen einzelner Einträge). Geteilte Listen sind davon nicht
+betroffen: Sie laufen live über Firebase; die Sicherung merkt sich von ihnen nur Name und Einladung.
 
 Einrichtung (einmalig, zusätzlich zu „Listen teilen“):
 1. Firebase-Konsole → **Authentication → Anmeldemethode → Google** aktivieren.
