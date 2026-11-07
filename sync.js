@@ -7,18 +7,18 @@ import { firebaseConfig } from './firebase-config.js';
 const SDK = 'https://www.gstatic.com/firebasejs/10.14.1/';
 const COLL = { s: 'sections', p: 'products', a: 'archive' };
 
-let F, fdb, api;
+let F, A, fdb, auth, api;
 const subs = new Map(); // lokale Listen-ID → Abo
 
 export const configured = () => !!firebaseConfig.apiKey;
 
 export async function init(callbacks) {
   api = callbacks;
-  const [{ initializeApp }, A, Fs] = await Promise.all(
+  const [{ initializeApp }, Au, Fs] = await Promise.all(
     ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js'].map(f => import(SDK + f)));
-  F = Fs;
+  F = Fs; A = Au;
   const app = initializeApp(firebaseConfig);
-  const auth = A.getAuth(app);
+  auth = A.getAuth(app);
   // Lokaler Cache in IndexedDB: Listen funktionieren offline, Änderungen werden nachgeliefert
   fdb = F.initializeFirestore(app, { localCache: F.persistentLocalCache({ tabManager: F.persistentMultipleTabManager() }) });
   if (firebaseConfig.emulator) {
@@ -149,3 +149,79 @@ export function status(list) {
   if (Object.values(sub.pending).some(Boolean)) return navigator.onLine ? 'pending' : 'offline';
   return sub.fromCache && !navigator.onLine ? 'offline' : 'live';
 }
+
+/* ---------- Cloud-Sicherung mit Google-Konto ----------
+   users/{uid}            { updatedAt, device, parts, listen, rezepte }
+   users/{uid}/teile/{i}  { data }   – die Sicherung als JSON, in Teile zerlegt (Firestore: max. 1 MiB je Dokument) */
+const PART_SIZE = 700_000;
+
+export function account() {
+  const u = auth && auth.currentUser;
+  const google = u && u.providerData.find(p => p.providerId === 'google.com');
+  return google ? { uid: u.uid, email: google.email || u.email || '', name: google.displayName || '' } : null;
+}
+
+/* Anmelden: die bisherige anonyme Anmeldung wird mit dem Google-Konto verknüpft (gleiche uid, geteilte Listen
+   laufen weiter). Ist das Google-Konto schon mit einer anderen uid verknüpft (z. B. von einem anderen Gerät),
+   wird zu dieser gewechselt. */
+export async function signInWithGoogle() {
+  const provider = new A.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  // nur für Tests mit dem Auth-Emulator: Test-Google-Konto statt Popup
+  const testUser = firebaseConfig.emulator && firebaseConfig.emulator.googleTestUser;
+  const testCred = testUser && A.GoogleAuthProvider.credential(JSON.stringify(testUser));
+  try {
+    if (auth.currentUser && auth.currentUser.isAnonymous) {
+      await (testCred ? A.linkWithCredential(auth.currentUser, testCred) : A.linkWithPopup(auth.currentUser, provider));
+    } else await (testCred ? A.signInWithCredential(auth, testCred) : A.signInWithPopup(auth, provider));
+  } catch (e) {
+    if (e.code !== 'auth/credential-already-in-use') throw e;
+    const cred = A.GoogleAuthProvider.credentialFromError(e) || testCred;
+    if (!cred) throw e;
+    await A.signInWithCredential(auth, cred);
+  }
+  return account();
+}
+
+export async function signOutGoogle() {
+  await A.signOut(auth);
+  await A.signInAnonymously(auth); // geteilte Listen brauchen weiterhin eine (anonyme) Anmeldung
+}
+
+function userDoc() {
+  const a = account();
+  if (!a) throw Object.assign(new Error('nicht angemeldet'), { code: 'not-signed-in' });
+  return F.doc(fdb, 'users', a.uid);
+}
+
+/* Stand der Sicherung → { updatedAt, device, listen, rezepte } oder null. Bevorzugt vom Server, offline aus dem Cache */
+export async function backupInfo() {
+  const ref = userDoc();
+  let snap;
+  try { snap = await F.getDocFromServer(ref); } catch { snap = await F.getDoc(ref).catch(() => null); }
+  return snap && snap.exists() ? snap.data() : null;
+}
+
+export async function uploadBackup(json, { device, listen, rezepte }) {
+  const ref = userDoc();
+  const parts = [];
+  for (let i = 0; i < json.length; i += PART_SIZE) parts.push(json.slice(i, i + PART_SIZE));
+  const updatedAt = Date.now();
+  const batch = F.writeBatch(fdb);
+  parts.forEach((data, i) => batch.set(F.doc(ref, 'teile', String(i)), { data }));
+  batch.set(ref, { updatedAt, device, parts: parts.length, listen, rezepte });
+  // ohne Netz bestätigt Firestore erst später – lokal ist die Sicherung dann schon vorgemerkt
+  await Promise.race([batch.commit(), new Promise(r => setTimeout(r, 8000))]);
+  return updatedAt;
+}
+
+export async function downloadBackup() {
+  const info = await backupInfo();
+  if (!info) return null;
+  const ref = userDoc();
+  const parts = await Promise.all(Array.from({ length: info.parts }, (_, i) =>
+    F.getDocFromServer(F.doc(ref, 'teile', String(i))).catch(() => F.getDoc(F.doc(ref, 'teile', String(i))))));
+  if (parts.some(p => !p.exists())) throw new Error('Sicherung unvollständig');
+  return { info, json: parts.map(p => p.data().data).join('') };
+}
+
